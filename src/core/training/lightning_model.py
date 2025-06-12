@@ -20,7 +20,7 @@ class CoreLightningModel(L.LightningModule):
     def training_step(self, batch, batch_idx):
         input_ids, labels = batch
         outputs = self.model(input_ids=input_ids, labels=labels)
-        self.log("train_loss", outputs.loss)
+        self.log("train_loss", outputs.loss, on_step=True, on_epoch=False, prog_bar=True)
         return outputs.loss
 
     def validation_step(self, batch, batch_idx):

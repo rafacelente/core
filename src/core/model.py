@@ -33,6 +33,8 @@ class CoreConfig(BaseModel):
     vocab_size: int
     max_sequence_length: int
 
+    pad_token_id: int = -100
+
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
     @classmethod
@@ -53,6 +55,7 @@ class CoreConfig(BaseModel):
             init_method=self.init_method,
             init_seed=self.init_seed,
             vocab_size=self.vocab_size,
+            ignore_index=self.pad_token_id
         )
         model.init_weights(max_seq_len=self.max_sequence_length)
         return model

@@ -6,6 +6,7 @@ from transformers import AutoTokenizer
 
 from core.model import CoreConfig
 from core.training.lightning_model import CoreLightningModel
+from core.training.callbacks.log_callback import LogCallback
 
 
 class WikiTextDataset(Dataset):
@@ -26,13 +27,11 @@ class WikiTextDataModule(LightningDataModule):
         super().__init__()
         self.batch_size = batch_size
         self.max_length = max_length
-        self.tokenizer = AutoTokenizer.from_pretrained("gpt2")
-
-    def prepare_data(self):
-        load_dataset("wikitext", "wikitext-2-v1")
+        self.tokenizer = AutoTokenizer.from_pretrained("deepseek-ai/DeepSeek-R1-0528", padding_side="right")
+        print(f"PAD TOKEN ID: {self.tokenizer.pad_token_id}")
 
     def setup(self, stage=None):
-        dataset = load_dataset("wikitext", "wikitext-2-v1")
+        dataset = load_dataset("HuggingFaceFW/fineweb-2", name="por_Latn")
         self.train_dataset = self._prepare_dataset(dataset["train"])
         self.val_dataset = self._prepare_dataset(dataset["validation"])
         self.test_dataset = self._prepare_dataset(dataset["test"])
@@ -69,21 +68,32 @@ class WikiTextDataModule(LightningDataModule):
 
 
 def main():
+
+    data_module = WikiTextDataModule(batch_size=16, max_length=512)
+
     config = CoreConfig(
         n_layers=12,
-        d_model=768,
-        attention=dict(n_heads=12),
-        feed_forward=dict(d_ff=3072),
+        d_model=256,
+        attention=dict(n_heads=16),
+        feed_forward=dict(ff_hidden_size=2048),
         layer_norm=dict(eps=1e-5),
-        vocab_size=30522,
+        vocab_size=data_module.tokenizer.vocab_size,
+        dropout=0.1,
         max_sequence_length=512,
+        pad_token_id=1,
     )
 
     lightning_model = CoreLightningModel(config)
 
-    data_module = WikiTextDataModule(batch_size=16, max_length=512)
-
-    trainer = Trainer(max_epochs=3, accelerator="auto", devices="auto")
+    trainer = Trainer(
+        max_epochs=1,
+        accelerator="auto",
+        devices="auto",
+        precision="bf16-mixed",
+        callbacks=[
+            LogCallback(what="steps", every_n=10)
+        ]
+    )
 
     trainer.fit(lightning_model, data_module)
 
