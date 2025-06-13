@@ -48,7 +48,7 @@ class ThroughputMeasureCallback(Callback):
         self.measure_started = False
 
     @rank_zero_only
-    def setup(self, args, state, control):
+    def setup(self, trainer: L.Trainer, pl_module: L.LightningModule):
         self.starter = torch.cuda.Event(enable_timing=True)
         self.ender = torch.cuda.Event(enable_timing=True)
         logging.warning("Profiling callback initialized")
