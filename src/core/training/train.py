@@ -25,11 +25,12 @@ class WikiTextDataset(Dataset):
 
 
 class WikiTextDataModule(LightningDataModule):
-    def __init__(self, batch_size=16, max_length=512):
+    def __init__(self, batch_size=2, max_length=512):
         super().__init__()
         self.batch_size = batch_size
         self.max_length = max_length
-        self.tokenizer = AutoTokenizer.from_pretrained("deepseek-ai/DeepSeek-R1-0528", padding_side="right")
+        self.tokenizer = AutoTokenizer.from_pretrained("maritaca-ai/sabia-2-tokenizer-small", padding_side="right")
+        self.tokenizer.pad_token = "[PAD]"
         print(f"PAD TOKEN ID: {self.tokenizer.pad_token_id}")
 
     def setup(self, stage=None):
@@ -76,10 +77,10 @@ def main():
     data_module = WikiTextDataModule(batch_size=16, max_length=512)
 
     config = CoreConfig(
-        n_layers=12,
-        d_model=256,
+        n_layers=24,
+        d_model=1024,
         attention=dict(n_heads=16),
-        feed_forward=dict(ff_hidden_size=2048),
+        feed_forward=dict(ff_ratio=4),
         layer_norm=dict(eps=1e-5),
         vocab_size=data_module.tokenizer.vocab_size,
         dropout=0.1,
@@ -114,7 +115,6 @@ def main():
                 active=3,
                 repeat=1,
             ),
-            with_modules=True,
         )
 
         callbacks.append(ProfilerCallback(prof=torch_profiler))
