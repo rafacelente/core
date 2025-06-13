@@ -4,9 +4,11 @@ from lightning import LightningDataModule, Trainer
 from torch.utils.data import DataLoader, Dataset
 from transformers import AutoTokenizer
 
+from torch.profiler import profile, ProfilerActivity
 from core.model import CoreConfig
 from core.training.lightning_model import CoreLightningModel
 from core.training.callbacks.log_callback import LogCallback
+from core.training.callbacks.profiler_callback import ProfilerCallback, ThroughputMeasureCallback
 
 
 class WikiTextDataset(Dataset):
@@ -69,6 +71,8 @@ class WikiTextDataModule(LightningDataModule):
 
 def main():
 
+    use_profiler = True
+
     data_module = WikiTextDataModule(batch_size=16, max_length=512)
 
     config = CoreConfig(
@@ -85,17 +89,55 @@ def main():
 
     lightning_model = CoreLightningModel(config)
 
+    callbacks = [
+        LogCallback(what="steps", every_n=10),
+    ]
+
+    if use_profiler:
+        def _on_trace_ready(p: profile):
+            save_name = f"./trace.json"
+            memory_save_name = "./trace_memory.html"
+            p.export_chrome_trace(save_name)
+            p.export_memory_timeline(memory_save_name)
+            print(f"Saving trace: {save_name}")
+            print(f"Saving memory trace: {memory_save_name}")
+
+        torch_profiler = profile(
+            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+            record_shapes=True,
+            on_trace_ready=_on_trace_ready,
+            profile_memory=True,
+            with_stack=True,
+            schedule=torch.profiler.schedule(
+                wait=1,
+                warmup=5,
+                active=3,
+                repeat=1,
+            ),
+            with_modules=True,
+        )
+
+        callbacks.append(ProfilerCallback(prof=torch_profiler))
+        callbacks.append(ThroughputMeasureCallback(
+            batch_size=data_module.batch_size,
+            num_gpus=1,
+            seq_len=data_module.max_length,
+            grad_accumulation_steps=1,
+        ))
+    else:
+        import contextlib
+        torch_profiler = contextlib.nullcontext()
+
     trainer = Trainer(
         max_epochs=1,
         accelerator="auto",
         devices="auto",
         precision="bf16-mixed",
-        callbacks=[
-            LogCallback(what="steps", every_n=10)
-        ]
+        callbacks=callbacks,
     )
 
-    trainer.fit(lightning_model, data_module)
+    with torch_profiler:
+        trainer.fit(lightning_model, data_module)
 
 
 if __name__ == "__main__":
