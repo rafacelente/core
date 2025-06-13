@@ -25,7 +25,7 @@ class WikiTextDataset(Dataset):
 
 
 class WikiTextDataModule(LightningDataModule):
-    def __init__(self, batch_size=32, max_length=512):
+    def __init__(self, batch_size=16, max_length=512):
         super().__init__()
         self.batch_size = batch_size
         self.max_length = max_length
@@ -33,7 +33,7 @@ class WikiTextDataModule(LightningDataModule):
         print(f"PAD TOKEN ID: {self.tokenizer.pad_token_id}")
 
     def setup(self, stage=None):
-        dataset = load_dataset("HuggingFaceFW/fineweb-2", name="por_Latn")
+        dataset = load_dataset("wikitext", name="wikitext-2-v1")
         self.train_dataset = self._prepare_dataset(dataset["train"])
         self.val_dataset = self._prepare_dataset(dataset["validation"])
         self.test_dataset = self._prepare_dataset(dataset["test"])
