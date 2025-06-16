@@ -19,7 +19,7 @@ class ProfilerCallback(Callback):
         self.step_count = 0
 
     @rank_zero_only
-    def on_train_batch_end(self, trainer: L.Trainer, pl_module: L.LightningModule):
+    def on_train_batch_end(self, trainer: L.Trainer, pl_module: L.LightningModule, outputs, batch, batch_idx):
         self.step_count += 1
         self.prof.step()
 
@@ -48,7 +48,7 @@ class ThroughputMeasureCallback(Callback):
         self.measure_started = False
 
     @rank_zero_only
-    def setup(self, trainer: L.Trainer, pl_module: L.LightningModule):
+    def setup(self, trainer: L.Trainer, pl_module: L.LightningModule, stage=None):
         self.starter = torch.cuda.Event(enable_timing=True)
         self.ender = torch.cuda.Event(enable_timing=True)
         logging.warning("Profiling callback initialized")
@@ -68,13 +68,14 @@ class ThroughputMeasureCallback(Callback):
         logging.warning(f"Total optimizer steps: {self.step_count} (counted: {counted_steps})")
         logging.warning(f"Time taken per optimizer step: {time_per_step}")
         logging.warning(f"Throughput: {throughput} samples/sec")
+        logging.warning(f"Throughput: {throughput * self.seq_len} tokens/sec")
 
         max_allocated_memory = torch.cuda.max_memory_allocated()
         logging.warning(f"Max allocated memory: {max_allocated_memory}")
 
 
     @rank_zero_only
-    def on_train_batch_end(self, trainer: L.Trainer, pl_module: L.LightningModule):
+    def on_train_batch_end(self, trainer: L.Trainer, pl_module: L.LightningModule, outputs, batch, batch_idx):
         if not self._initialized:
             self.setup(trainer, pl_module)
         if self.starting_step >= self.step_count and not self.measure_started:
