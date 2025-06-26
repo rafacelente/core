@@ -79,16 +79,21 @@ def main():
     config = CoreConfig(
         n_layers=24,
         d_model=1024,
-        attention=dict(n_heads=16),
+        attention=dict(
+            n_heads=16,
+            use_rope=False,
+        ),
         feed_forward=dict(ff_ratio=4),
         layer_norm=dict(eps=1e-5),
         vocab_size=data_module.tokenizer.vocab_size,
         dropout=0.1,
-        max_sequence_length=512,
+        max_sequence_length=2048,
         pad_token_id=1,
     )
 
-    lightning_model = CoreLightningModel(config)
+    lightning_model = CoreLightningModel(config, optimizer_type="adam")
+
+    print(lightning_model)
 
     callbacks = [
         LogCallback(what="steps", every_n=10),
@@ -118,16 +123,16 @@ def main():
         )
 
         callbacks.append(ProfilerCallback(prof=torch_profiler))
-        callbacks.append(ThroughputMeasureCallback(
-            batch_size=data_module.batch_size,
-            num_gpus=1,
-            seq_len=data_module.max_length,
-            grad_accumulation_steps=1,
-        ))
     else:
         import contextlib
         torch_profiler = contextlib.nullcontext()
 
+    callbacks.append(ThroughputMeasureCallback(
+                batch_size=data_module.batch_size,
+                num_gpus=1,
+                seq_len=data_module.max_length,
+                grad_accumulation_steps=1,
+            ))
     trainer = Trainer(
         max_epochs=1,
         accelerator="auto",
