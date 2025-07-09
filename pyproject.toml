@@ -17,7 +17,10 @@ dependencies = [
 ]
 
 [tool.poetry]
-packages = [{include = "core", from = "src"}]
+packages = [
+    {include = "core", from = "src"},
+    {include = "core/_cuda", from = "csrc/python"},
+]
 
 
 [tool.poetry.group.dev.dependencies]
