@@ -3,7 +3,7 @@
 #include <cuda_bf16.h>
 #include <omp.h>
 #include <cuda_runtime.h>
-
+#include "pyutils/pyutils.cuh"
 #include "kittens.cuh"
 using namespace kittens;
 
@@ -15,6 +15,8 @@ struct fr_globals {
     using _gl = gl<float, -1, -1, -1, -1, st_fl<_row, _col>>;
     _gl x;
     float accum;
+    dim3 grid() { return dim3(_gl.batch, _gl.depth, _gl.rows);}
+    dim3 block() { return dim3(_gl.cols);}
 }
 
 __global__ __launch_bounds__(NUM_THREADS, 1)
@@ -45,11 +47,13 @@ void fr_tk(const __grid_constant__ fr_globals g) {
     load(g.accum, accum_reg);
 }
 
-void dispatch_fr_tk(float *x, float *accum) {
-    using _gl = gl<float, -1, -1, -1, -1, st_fl<_row, _col>>;
-    using globals = fr_globals;
-    _gl x_gl{x, 1, 1, _row, _col};
-    globals g{x_gl, 0.0f};
-    fr_tk<<<1, 32>>>(g);
-    cudaDeviceSynchronize();
+void dispatch_fr_tk(fr_globals g) {
+    fr_tk<<<g.grid(), g.block()>>>(g);
+}
+
+PYBIND11_MODULE(fr_norm, m) {
+    m.doc() = "Frobenius norm";
+    py::bind_kernel<fr_tk>(m, "fr_tk", &fr_globals::x, &fr_globals::accum);
+    py::bind_function<dispatch_fr_tk>(m, "dispatch_fr_tk", &fr_globals);
+    
 }
