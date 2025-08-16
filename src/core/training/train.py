@@ -1,8 +1,10 @@
 import torch
 from datasets import load_dataset
 from lightning import LightningDataModule, Trainer
+from lightning.pytorch.loggers import WandbLogger
 from torch.utils.data import DataLoader, Dataset
 from transformers import AutoTokenizer
+import wandb
 
 from torch.profiler import profile, ProfilerActivity
 from core.model import CoreConfig
@@ -102,6 +104,14 @@ def main():
             p.export_memory_timeline(memory_save_name)
             print(f"Saving trace: {save_name}")
             print(f"Saving memory trace: {memory_save_name}")
+            
+            # Upload artifacts to wandb
+            try:
+                wandb.log_artifact(save_name, name="profiler_trace", type="trace")
+                wandb.log_artifact(memory_save_name, name="memory_timeline", type="trace")
+                print("Successfully uploaded profiler artifacts to wandb")
+            except Exception as e:
+                print(f"Failed to upload artifacts to wandb: {e}")
 
         torch_profiler = profile(
             activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
@@ -128,16 +138,40 @@ def main():
         import contextlib
         torch_profiler = contextlib.nullcontext()
 
+    # Create wandb logger with config
+    wandb_logger = WandbLogger(
+        project="core",
+        # name="wikitext-training",
+        log_model=False,
+        save_dir="./wandb_logs",
+        config={
+            "batch_size": data_module.batch_size,
+            "max_length": data_module.max_length,
+            "n_layers": config.n_layers,
+            "d_model": config.d_model,
+            "n_heads": config.attention.n_heads,
+            "ff_ratio": config.feed_forward.ff_ratio,
+            "dropout": config.dropout,
+            "learning_rate": lightning_model.learning_rate,
+            "vocab_size": config.vocab_size,
+            "max_sequence_length": config.max_sequence_length,
+        }
+    )
+
     trainer = Trainer(
         max_epochs=1,
         accelerator="auto",
         devices="auto",
         precision="bf16-mixed",
         callbacks=callbacks,
+        logger=wandb_logger,
     )
 
     with torch_profiler:
         trainer.fit(lightning_model, data_module)
+    
+    # Finish wandb run
+    wandb.finish()
 
 
 if __name__ == "__main__":

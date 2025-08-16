@@ -1,7 +1,7 @@
 from typing import Any, Dict, Optional
 import logging
 
-
+import wandb
 import torch
 import lightning as L
 from lightning.pytorch.callbacks import Callback
@@ -63,15 +63,32 @@ class ThroughputMeasureCallback(Callback):
         time_per_step = elapsed_time / counted_steps
         samples_per_step = self.batch_size * self.num_gpus * self.grad_accumulation_steps  # type: ignore
         throughput = samples_per_step / (time_per_step / 1000)
+        tokens_per_sec = throughput * self.seq_len
 
         logging.warning(f"Elapsed time: {elapsed_time}")
         logging.warning(f"Total optimizer steps: {self.step_count} (counted: {counted_steps})")
         logging.warning(f"Time taken per optimizer step: {time_per_step}")
         logging.warning(f"Throughput: {throughput} samples/sec")
-        logging.warning(f"Throughput: {throughput * self.seq_len} tokens/sec")
+        logging.warning(f"Throughput: {tokens_per_sec} tokens/sec")
 
         max_allocated_memory = torch.cuda.max_memory_allocated()
         logging.warning(f"Max allocated memory: {max_allocated_memory}")
+
+        # Log metrics to wandb
+        try:
+            wandb.log({
+                "performance/elapsed_time_ms": elapsed_time,
+                "performance/total_steps": self.step_count,
+                "performance/counted_steps": counted_steps,
+                "performance/time_per_step_ms": time_per_step,
+                "performance/samples_per_sec": throughput,
+                "performance/tokens_per_sec": tokens_per_sec,
+                "performance/max_memory_allocated": max_allocated_memory,
+                "performance/max_memory_allocated_gb": max_allocated_memory / 1024**3,
+            })
+            logging.warning("Successfully logged performance metrics to wandb")
+        except Exception as e:
+            logging.warning(f"Failed to log performance metrics to wandb: {e}")
 
 
     @rank_zero_only
