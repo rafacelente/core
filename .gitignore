@@ -1,3 +1,7 @@
+lightning_logs/
+wandb_logs/
+trace.json
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
