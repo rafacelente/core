@@ -1,17 +1,22 @@
 import torch
+import logging
 from datasets import load_dataset
 from lightning import LightningDataModule, Trainer
+from lightning.pytorch.profilers import PyTorchProfiler
 from lightning.pytorch.loggers import WandbLogger
 from torch.utils.data import DataLoader, Dataset
 from transformers import AutoTokenizer
 import wandb
 
-from torch.profiler import profile, ProfilerActivity
+from torch.profiler import profile
 from core.model import CoreConfig
 from core.training.lightning_model import CoreLightningModel
 from core.training.callbacks.log_callback import LogCallback
-from core.training.callbacks.profiler_callback import ProfilerCallback, ThroughputMeasureCallback
+from core.training.callbacks.profiler_callback import ThroughputMeasureCallback
 
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class WikiTextDataset(Dataset):
     def __init__(self, data, max_length):
@@ -74,19 +79,21 @@ class WikiTextDataModule(LightningDataModule):
 
 def main():
 
-    use_profiler = True
+    use_profiler = False
 
-    data_module = WikiTextDataModule(batch_size=16, max_length=512)
+    sequence_length = 2048
+
+    data_module = WikiTextDataModule(batch_size=8, max_length=sequence_length)
 
     config = CoreConfig(
-        n_layers=24,
+        n_layers=16,
         d_model=1024,
-        attention=dict(n_heads=16),
+        attention=dict(n_heads=16, dropout=0.1),
         feed_forward=dict(ff_ratio=4),
         layer_norm=dict(eps=1e-5),
         vocab_size=data_module.tokenizer.vocab_size,
         dropout=0.1,
-        max_sequence_length=512,
+        max_sequence_length=sequence_length,
         pad_token_id=1,
     )
 
@@ -98,14 +105,16 @@ def main():
 
     if use_profiler:
         def _on_trace_ready(p: profile):
-            save_name = f"./trace.json"
-            memory_save_name = "./trace_memory.html"
-            p.export_chrome_trace(save_name)
-            p.export_memory_timeline(memory_save_name)
+            save_name = f"trace_{wandb.run.id}.json"
+            memory_save_name = f"trace_memory_{wandb.run.id}.html"
             print(f"Saving trace: {save_name}")
+            p.export_chrome_trace(save_name)
             print(f"Saving memory trace: {memory_save_name}")
+            try:
+                p.export_memory_timeline(memory_save_name)
+            except Exception as e:
+                print(f"Failed to save memory trace: {e}")
             
-            # Upload artifacts to wandb
             try:
                 wandb.log_artifact(save_name, name="profiler_trace", type="trace")
                 wandb.log_artifact(memory_save_name, name="memory_timeline", type="trace")
@@ -113,10 +122,22 @@ def main():
             except Exception as e:
                 print(f"Failed to upload artifacts to wandb: {e}")
 
-        torch_profiler = profile(
-            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-            record_shapes=True,
+        # torch_profiler = profile(
+        #     activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+        #     record_shapes=True,
+        #     on_trace_ready=_on_trace_ready,
+        #     profile_memory=True,
+        #     with_stack=True,
+        #     schedule=torch.profiler.schedule(
+        #         wait=1,
+        #         warmup=5,
+        #         active=3,
+        #         repeat=1,
+        #     ),
+        # )
+        torch_profiler = PyTorchProfiler(
             on_trace_ready=_on_trace_ready,
+            record_shapes=True,
             profile_memory=True,
             with_stack=True,
             schedule=torch.profiler.schedule(
@@ -127,7 +148,7 @@ def main():
             ),
         )
 
-        callbacks.append(ProfilerCallback(prof=torch_profiler))
+        # callbacks.append(ProfilerCallback(prof=torch_profiler))
         callbacks.append(ThroughputMeasureCallback(
             batch_size=data_module.batch_size,
             num_gpus=1,
@@ -135,8 +156,7 @@ def main():
             grad_accumulation_steps=1,
         ))
     else:
-        import contextlib
-        torch_profiler = contextlib.nullcontext()
+        torch_profiler = None
 
     # Create wandb logger with config
     wandb_logger = WandbLogger(
@@ -165,12 +185,11 @@ def main():
         precision="bf16-mixed",
         callbacks=callbacks,
         logger=wandb_logger,
+        profiler=torch_profiler,
     )
 
-    with torch_profiler:
-        trainer.fit(lightning_model, data_module)
+    trainer.fit(lightning_model, data_module)
     
-    # Finish wandb run
     wandb.finish()
 
 

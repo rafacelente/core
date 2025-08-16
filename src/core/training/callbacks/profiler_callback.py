@@ -74,7 +74,6 @@ class ThroughputMeasureCallback(Callback):
         max_allocated_memory = torch.cuda.max_memory_allocated()
         logging.warning(f"Max allocated memory: {max_allocated_memory}")
 
-        # Log metrics to wandb
         try:
             wandb.log({
                 "performance/elapsed_time_ms": elapsed_time,
