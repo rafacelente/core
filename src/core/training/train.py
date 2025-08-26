@@ -36,8 +36,8 @@ class WikiTextDataModule(LightningDataModule):
         super().__init__()
         self.batch_size = batch_size
         self.max_length = max_length
-        self.tokenizer = AutoTokenizer.from_pretrained("maritaca-ai/sabia-2-tokenizer-small", padding_side="right")
-        self.tokenizer.pad_token = "[PAD]"
+        self.tokenizer = AutoTokenizer.from_pretrained("gpt2", padding_side="right")
+        self.tokenizer.pad_token = self.tokenizer.eos_token
         print(f"PAD TOKEN ID: {self.tokenizer.pad_token_id}")
 
     def setup(self, stage=None):
@@ -79,11 +79,11 @@ class WikiTextDataModule(LightningDataModule):
 
 def main():
 
-    use_profiler = False
+    use_profiler = True
 
     sequence_length = 2048
 
-    data_module = WikiTextDataModule(batch_size=8, max_length=sequence_length)
+    data_module = WikiTextDataModule(batch_size=16, max_length=sequence_length)
 
     config = CoreConfig(
         n_layers=16,
@@ -94,10 +94,10 @@ def main():
         vocab_size=data_module.tokenizer.vocab_size,
         dropout=0.1,
         max_sequence_length=sequence_length,
-        pad_token_id=1,
+        pad_token_id=data_module.tokenizer.pad_token_id,
     )
 
-    lightning_model = CoreLightningModel(config)
+    lightning_model = CoreLightningModel(config, optimizer_name="muon")
 
     callbacks = [
         LogCallback(what="steps", every_n=10),
@@ -186,6 +186,7 @@ def main():
         callbacks=callbacks,
         logger=wandb_logger,
         profiler=torch_profiler,
+        val_check_interval=0.25,
     )
 
     trainer.fit(lightning_model, data_module)
