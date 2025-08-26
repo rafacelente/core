@@ -1,5 +1,7 @@
-from typing import Optional
+from typing import Optional, cast
+import math
 
+from enum import Enum
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -9,8 +11,11 @@ from core.modules.layer_norm import LayerNorm, LayerNormType
 from core.modules.rope import RoPE, RoPEType
 from core.utils import BufferCache
 
+class AttentionType(str, Enum):
+    DEFAULT = "default"
+    NORMALIZED = "normalized"
 
-class Attention(nn.Module):
+class DefaultAttention(nn.Module):
     def __init__(
         self,
         d_model: int,
@@ -87,3 +92,102 @@ class Attention(nn.Module):
         att = self.sdpa(q, k, v)
         att = att.view(bs, seq_len, -1)
         return self.w_o(att)
+
+
+class NormalizedAttention(DefaultAttention):
+    def __init__(
+        self,
+        d_model: int,
+        n_heads: int,
+        n_kv_heads: Optional[int] = None,
+        use_rope: bool = True,
+        rope_type: RoPEType = RoPEType.DEFAULT,
+        clip_qkv: Optional[float] = None,
+        qk_norm_type: Optional[LayerNormType] = None,
+        dropout: float = 0.0,
+        cache: Optional[BufferCache] = None,
+    ):
+        super().__init__(d_model, n_heads, n_kv_heads, use_rope, rope_type, clip_qkv, qk_norm_type, dropout, cache)
+        self.sq_init_value = 1.0
+        self.sk_init_value = 1.0
+        self.sq_init_scaling = 1.0 / math.sqrt(d_model)
+        self.sk_init_scaling = 1.0 / math.sqrt(d_model)
+        self.sq = nn.Parameter(self.sq_init_scaling * torch.ones(self.n_heads * self.head_dim))
+        self.sk = nn.Parameter(self.sk_init_scaling * torch.ones(self.n_kv_heads * self.head_dim))
+
+        self.sqrt_head_dim = math.sqrt(self.head_dim)
+
+    def forward(self, x: torch.Tensor, pos_sin: Optional[torch.Tensor] = None, pos_cos: Optional[torch.Tensor] = None) -> torch.Tensor:
+        bs, seq_len, _ = x.shape
+        q, k, v = self.w_q(x), self.w_k(x), self.w_v(x)
+
+        if self.q_norm is not None:
+            q = self.q_norm(q)
+        if self.k_norm is not None:
+            k = self.k_norm(k)
+
+        sq = (self.sq * (self.sq_init_value / self.sq_init_scaling)).view(1, 1, -1)
+        q = sq * q
+
+        sk = (self.sk * (self.sk_init_value / self.sk_init_scaling)).view(1, 1, -1)
+        k = sk * k
+
+        q = q.view(bs, seq_len, -1, self.head_dim) # B, T, n_heads, head_dim
+        k = k.view(bs, seq_len, -1, self.head_dim) # B, T, n_kv_heads, head_dim
+        v = v.view(bs, seq_len, -1, self.head_dim) # B, T, n_kv_heads, head_dim
+
+        if self.use_rope:
+            q, k = self.rope(q, k, pos_sin, pos_cos)
+
+        att = self.sdpa(q, k, v)
+        att = att.view(bs, seq_len, -1)
+        return self.w_o(att)
+
+    def justnorm(self, x: torch.Tensor, dim: int = -1) -> torch.Tensor:
+        return x / x.norm(p=2, dim=dim, keepdim=True, dtype=torch.float32).type_as(x)
+
+    def _normalize_matrix(self, m: torch.Tensor, dim: int = -1) -> torch.Tensor:
+        m.copy_(self.justnorm(m, dim=dim))
+
+    @torch.no_grad()
+    def normalize_matrices(self):
+        self._normalize_matrix(self.w_q.weight)
+        self._normalize_matrix(self.w_k.weight)
+        self._normalize_matrix(self.w_v.weight)
+        self._normalize_matrix(self.w_o.weight, dim=0)
+
+
+class Attention(nn.Module):
+    def __init__(
+        self,
+        d_model: int,
+        n_heads: int,
+        n_kv_heads: Optional[int] = None,
+        use_rope: bool = True,
+        rope_type: RoPEType = RoPEType.DEFAULT,
+        clip_qkv: Optional[float] = None,
+        qk_norm_type: Optional[LayerNormType] = None,
+        dropout: float = 0.0,
+        cache: Optional[BufferCache] = None,
+    ):
+        super().__init__()
+    
+    def forward(
+        self,
+        x: torch.Tensor,
+        pos_sin: Optional[torch.Tensor] = None,
+        pos_cos: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        raise NotImplementedError
+    
+    @staticmethod
+    def build(
+        type: AttentionType,
+        **kwargs,
+    ) -> "Attention":
+        if type == AttentionType.DEFAULT:
+            return cast(Attention, DefaultAttention(**kwargs))
+        elif type == AttentionType.NORMALIZED:
+            return cast(Attention, NormalizedAttention(**kwargs))
+        else:
+            raise ValueError(f"Invalid attention type: {type}")

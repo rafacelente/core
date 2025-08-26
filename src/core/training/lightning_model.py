@@ -47,6 +47,9 @@ class CoreLightningModel(L.LightningModule):
         
         for optimizer in optimizers:
             optimizer.step()
+        
+        if hasattr(self.model, "post_optim_step"):
+            self.model.post_optim_step()
 
         schedulers = self.lr_schedulers()
         if not isinstance(schedulers, list):

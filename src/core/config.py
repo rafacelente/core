@@ -4,7 +4,7 @@ from typing import Optional
 import torch
 from pydantic import BaseModel, ConfigDict
 
-from core.modules.attention import Attention
+from core.modules.attention import AttentionType, Attention
 from core.modules.feed_forward import ActivationType, FeedForward, FeedForwardType
 from core.modules.layer_norm import LayerNorm, LayerNormType
 from core.modules.rope import RoPEType
@@ -93,7 +93,7 @@ class AttentionConfig(BaseModel):
     """
     Configuration for the attention.
     """
-
+    type: AttentionType = AttentionType.DEFAULT
     n_heads: int
     n_kv_heads: Optional[int] = None
     use_rope: bool = True
@@ -114,7 +114,8 @@ class AttentionConfig(BaseModel):
             raise ValueError(
                 f"d_model must be divisible by effective_kv_heads, got {d_model} and {self.effective_kv_heads}"
             )
-        return Attention(
+        return Attention.build(
+            type=self.type,
             d_model=d_model,
             n_heads=self.n_heads,
             n_kv_heads=self.n_kv_heads,

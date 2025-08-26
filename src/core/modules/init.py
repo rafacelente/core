@@ -11,6 +11,7 @@ from core.modules.feed_forward import FeedForward, FeedForwardType
 class InitMethod(str, Enum):
     NORMAL = "normal"
     LLAMA = "llama"
+    NORMALIZED = "normalized"
 
     def _init_linear(self, module: nn.Linear, std: float = 0.02, generator: Optional[torch.Generator] = None) -> None:
         nn.init.trunc_normal_(module.weight, mean=0.0, std=std, a=-3 * std, b=3 * std, generator=generator)
@@ -22,6 +23,8 @@ class InitMethod(str, Enum):
     ) -> None:
         if self in [InitMethod.LLAMA]:
             nn.init.normal_(module.weight, generator=generator)
+        elif self in [InitMethod.NORMALIZED]:
+            nn.init.normal_(module.weight, std=std, generator=generator)
         else:
             nn.init.trunc_normal_(module.weight, mean=0.0, std=0.02, a=-3 * 0.02, b=3 * 0.02, generator=generator)
 
@@ -29,16 +32,19 @@ class InitMethod(str, Enum):
         self, module: nn.Linear, d_model: int, std: float = 0.02, generator: Optional[torch.Generator] = None
     ) -> None:
         std = 0.02
-        if self in [InitMethod.LLAMA]:
+        if self in [InitMethod.LLAMA, InitMethod.NORMALIZED]:
             std = d_model**-0.5
         self._init_linear(module, std, generator)
 
     def init_attention(self, module: Attention, num_blocks: int, generator: Optional[torch.Generator] = None) -> None:
-        std = 0.02
+        if self == InitMethod.NORMALIZED:
+            std = module.d_model**-0.5
+        else:
+            std = 0.02
         for w in [module.w_q, module.w_k, module.w_v]:
             self._init_linear(w, std, generator)
 
-        if self == InitMethod.LLAMA:
+        if self in [InitMethod.LLAMA, InitMethod.NORMALIZED]:
             std = std / (2 * num_blocks) ** 0.5
 
         self._init_linear(module.w_o, std, generator)
@@ -46,9 +52,12 @@ class InitMethod(str, Enum):
     def _init_feed_forward_glu(
         self, module: FeedForward, num_blocks: int, generator: Optional[torch.Generator] = None
     ) -> None:
-        std = 0.02
+        if self == InitMethod.NORMALIZED:
+            std = module.d_model**-0.5
+        else:
+            std = 0.02
         self._init_linear(module.w1, std, generator)
-        if self == InitMethod.LLAMA:
+        if self in [InitMethod.LLAMA, InitMethod.NORMALIZED]:
             std = std / (2 * num_blocks) ** 0.5
         self._init_linear(module.w3, std, generator)
         self._init_linear(module.w2, std, generator)
@@ -56,9 +65,12 @@ class InitMethod(str, Enum):
     def _init_feed_forward_mlp(
         self, module: FeedForward, num_blocks: int, generator: Optional[torch.Generator] = None
     ) -> None:
-        std = 0.02
+        if self == InitMethod.NORMALIZED:
+            std = module.d_model**-0.5
+        else:
+            std = 0.02
         self._init_linear(module.w1, std, generator)
-        if self == InitMethod.LLAMA:
+        if self in [InitMethod.LLAMA, InitMethod.NORMALIZED]:
             std = std / (2 * num_blocks) ** 0.5
         self._init_linear(module.w2, std, generator)
 
