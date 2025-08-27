@@ -78,26 +78,46 @@ class WikiTextDataModule(LightningDataModule):
 
 
 def main():
+    transformer_type = "normalized"
+    optimizer_name = "muon"
+    if transformer_type == "normalized":
+        if optimizer_name == "adamw":
+            optimizer_kwargs = {"weight_decay": 0.0}
+        elif optimizer_name == "muon":
+            optimizer_kwargs = {}
+        dropout = 0.0
+    else:
+        optimizer_kwargs = {"weight_decay": 0.1}
+        dropout = 0.0
 
-    use_profiler = True
+    use_profiler = False
+    use_logger = True
 
     sequence_length = 2048
 
     data_module = WikiTextDataModule(batch_size=16, max_length=sequence_length)
 
     config = CoreConfig(
+        transformer_type=transformer_type,
         n_layers=16,
         d_model=1024,
-        attention=dict(n_heads=16, dropout=0.1),
-        feed_forward=dict(ff_ratio=4),
+        attention=dict(n_heads=16, dropout=dropout, use_rope=True),
+        feed_forward=dict(feed_forward_type="normalized_glu",ff_ratio=4, dropout=dropout),
         layer_norm=dict(eps=1e-5),
         vocab_size=data_module.tokenizer.vocab_size,
-        dropout=0.1,
+        dropout=dropout,
         max_sequence_length=sequence_length,
         pad_token_id=data_module.tokenizer.pad_token_id,
     )
 
-    lightning_model = CoreLightningModel(config, optimizer_name="muon")
+    lightning_model = CoreLightningModel(
+        config,
+        learning_rate=15e-4,
+        optimizer_name=optimizer_name,
+        optimizer_kwargs=optimizer_kwargs
+    )
+
+    print(f"Model: {lightning_model.model}")
 
     callbacks = [
         LogCallback(what="steps", every_n=10),
@@ -159,24 +179,27 @@ def main():
         torch_profiler = None
 
     # Create wandb logger with config
-    wandb_logger = WandbLogger(
-        project="core",
-        # name="wikitext-training",
-        log_model=False,
-        save_dir="./wandb_logs",
-        config={
-            "batch_size": data_module.batch_size,
-            "max_length": data_module.max_length,
-            "n_layers": config.n_layers,
-            "d_model": config.d_model,
-            "n_heads": config.attention.n_heads,
-            "ff_ratio": config.feed_forward.ff_ratio,
-            "dropout": config.dropout,
-            "learning_rate": lightning_model.learning_rate,
-            "vocab_size": config.vocab_size,
-            "max_sequence_length": config.max_sequence_length,
-        }
-    )
+    if use_logger:
+        wandb_logger = WandbLogger(
+            project="core",
+            # name="wikitext-training",
+            log_model=False,
+            save_dir="./wandb_logs",
+            config={
+                "batch_size": data_module.batch_size,
+                "max_length": data_module.max_length,
+                "n_layers": config.n_layers,
+                "d_model": config.d_model,
+                "n_heads": config.attention.n_heads,
+                "ff_ratio": config.feed_forward.ff_ratio,
+                "dropout": config.dropout,
+                "learning_rate": lightning_model.learning_rate,
+                "vocab_size": config.vocab_size,
+                "max_sequence_length": config.max_sequence_length,
+            }
+        )
+    else:
+        wandb_logger = None
 
     trainer = Trainer(
         max_epochs=1,
@@ -184,7 +207,7 @@ def main():
         devices="auto",
         precision="bf16-mixed",
         callbacks=callbacks,
-        logger=wandb_logger,
+        logger=wandb_logger if use_logger else None,
         profiler=torch_profiler,
         val_check_interval=0.25,
     )
