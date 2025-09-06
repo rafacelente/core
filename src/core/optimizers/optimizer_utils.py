@@ -9,6 +9,7 @@ class OptimizerName(str, Enum):
 
     ADAM = "adam"
     MUON = "muon"
+    MUON_8BIT = "muon_8bit"
     ADAMW = "adamw"
     SGD = "sgd"
 
@@ -51,6 +52,12 @@ def get_optimizer(
 
     if name_enum is OptimizerName.MUON:
         return configure_muon(model, lr, **kwargs)
+    elif name_enum is OptimizerName.MUON_8BIT:
+        try:
+            from .muon import Muon8bit
+            return configure_muon(model, lr, optimizer_class=Muon8bit, **kwargs)
+        except ImportError:
+            raise ValueError("Muon8bit optimizer not available. Please ensure it's implemented in the muon module.")
 
     optimizer_cls = OPTIMIZER_MAPPING[name_enum]
     return optimizer_cls(model.parameters(), lr=lr, **kwargs)  # type: ignore[arg-type]

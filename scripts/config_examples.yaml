@@ -1,0 +1,230 @@
+muon_normalized:
+  model_size: "small"
+  optimizer: "muon"
+  transformer_type: "normalized"
+  batch_size: 8
+  gradient_accumulation_steps: 1
+  learning_rate: 15e-4
+  max_epochs: 1
+  sequence_length: 2048
+  strategy: "ddp"
+  precision: "bf16-mixed"
+
+muon_small_base:
+  model_size: "small"
+  optimizer: "muon"
+  transformer_type: "base"
+  batch_size: 8
+  gradient_accumulation_steps: 1
+  learning_rate: 3e-4
+  max_epochs: 1
+  sequence_length: 2048
+  strategy: "ddp"
+  precision: "bf16-mixed"
+
+muon_medium_base:
+  model_size: "medium"
+  optimizer: "muon"
+  transformer_type: "base"
+  batch_size: 4
+  gradient_accumulation_steps: 1
+  learning_rate: 3e-4
+  max_epochs: 1
+  sequence_length: 2048
+  strategy: "ddp"
+  precision: "bf16-mixed"
+
+muon_large_base:
+  model_size: "large"
+  optimizer: "muon"
+  transformer_type: "base"
+  batch_size: 2
+  gradient_accumulation_steps: 1
+  learning_rate: 3e-4
+  max_epochs: 1
+  sequence_length: 2048
+  strategy: "ddp"
+  precision: "bf16-mixed"
+
+muon_xl_base:
+  model_size: "xl"
+  optimizer: "muon"
+  transformer_type: "base"
+  batch_size: 1
+  gradient_accumulation_steps: 1
+  learning_rate: 3e-4
+  max_epochs: 1
+  sequence_length: 2048
+  strategy: "ddp"
+  precision: "bf16-mixed"
+
+muon_8bit_small_base:
+  model_size: "small"
+  optimizer: "muon_8bit"
+  transformer_type: "base"
+  batch_size: 8
+  gradient_accumulation_steps: 1
+  learning_rate: 3e-4
+  max_epochs: 1
+  sequence_length: 2048
+  strategy: "ddp"
+  precision: "bf16-mixed"
+
+muon_8bit_medium_base:
+  model_size: "medium"
+  optimizer: "muon_8bit"
+  transformer_type: "base"
+  batch_size: 4
+  gradient_accumulation_steps: 1
+  learning_rate: 3e-4
+  max_epochs: 1
+  sequence_length: 2048
+  strategy: "ddp"
+  precision: "bf16-mixed"
+
+muon_8bit_large_base:
+  model_size: "large"
+  optimizer: "muon_8bit"
+  transformer_type: "base"
+  batch_size: 2
+  gradient_accumulation_steps: 1
+  learning_rate: 3e-4
+  max_epochs: 1
+  sequence_length: 2048
+  strategy: "ddp"
+  precision: "bf16-mixed"
+
+muon_8bit_xl_base:
+  model_size: "xl"
+  optimizer: "muon_8bit"
+  transformer_type: "base"
+  batch_size: 1
+  gradient_accumulation_steps: 1
+  learning_rate: 3e-4
+  max_epochs: 1
+  sequence_length: 2048
+  strategy: "ddp"
+  precision: "bf16-mixed"
+
+
+muon_8bit_large_normalized:
+  model_size: "large"
+  optimizer: "muon_8bit"
+  transformer_type: "normalized"
+  batch_size: 2
+  gradient_accumulation_steps: 1
+  learning_rate: 15e-4
+  max_epochs: 1
+  sequence_length: 2048
+  strategy: "ddp"
+  precision: "bf16-mixed"
+
+adamw_small_base:
+  model_size: "small"
+  optimizer: "adamw"
+  transformer_type: "base"
+  batch_size: 8
+  gradient_accumulation_steps: 1
+  learning_rate: 3e-4
+  weight_decay: 0.1
+  max_epochs: 1
+  sequence_length: 2048
+  strategy: "ddp"
+  precision: "bf16-mixed"
+
+adamw_medium_base:
+  model_size: "medium"
+  optimizer: "adamw"
+  transformer_type: "base"
+  batch_size: 4
+  gradient_accumulation_steps: 1
+  learning_rate: 3e-4
+  weight_decay: 0.1
+  max_epochs: 1
+  sequence_length: 2048
+  strategy: "ddp"
+  precision: "bf16-mixed"
+
+adamw_large_base:
+  model_size: "large"
+  optimizer: "adamw"
+  transformer_type: "base"
+  batch_size: 2
+  gradient_accumulation_steps: 1
+  learning_rate: 3e-4
+  weight_decay: 0.1
+  max_epochs: 1
+  sequence_length: 2048
+  strategy: "ddp"
+  precision: "bf16-mixed"
+
+adamw_xl_base:
+  model_size: "xl"
+  optimizer: "adamw"
+  transformer_type: "base"
+  batch_size: 1
+  gradient_accumulation_steps: 1
+  learning_rate: 3e-4
+  weight_decay: 0.1
+  max_epochs: 1
+  sequence_length: 2048
+  strategy: "ddp"
+  precision: "bf16-mixed"
+
+debug_muon:
+  model_size: "small"
+  optimizer: "muon"
+  transformer_type: "base"
+  batch_size: 2
+  gradient_accumulation_steps: 1
+  learning_rate: 15e-4
+  max_epochs: 1
+  max_steps: 100
+  sequence_length: 512
+  strategy: "auto"
+  precision: "bf16-mixed"
+  enable_profiling: true
+
+debug_muon_8bit:
+  model_size: "small"
+  optimizer: "muon_8bit"
+  transformer_type: "base"
+  batch_size: 2
+  gradient_accumulation_steps: 1
+  learning_rate: 15e-4
+  max_epochs: 1
+  max_steps: 100
+  sequence_length: 512
+  strategy: "auto"
+  precision: "bf16-mixed"
+  enable_profiling: true
+
+debug_muon_8bit_distributed:
+  model_size: "small"
+  optimizer: "muon_8bit"
+  transformer_type: "base"
+  batch_size: 2
+  gradient_accumulation_steps: 1
+  learning_rate: 15e-4
+  max_epochs: 1
+  max_steps: 100
+  sequence_length: 512
+  strategy: "ddp"
+  precision: "bf16-mixed"
+  enable_profiling: true
+  devices: 8
+  num_nodes: 1
+
+large_scale:
+  model_size: "xl"
+  optimizer: "muon"
+  transformer_type: "base"
+  batch_size: 1
+  gradient_accumulation_steps: 1
+  learning_rate: 15e-4
+  max_epochs: 3
+  sequence_length: 4096
+  strategy: "ddp"
+  precision: "bf16-mixed"
+  devices: 8
+  num_nodes: 1
