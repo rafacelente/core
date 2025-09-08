@@ -1,11 +1,7 @@
-#!/usr/bin/env python3
-
 import os
 import logging
 import argparse
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import List, Optional, Union
 
 import torch
 import lightning as L
@@ -14,9 +10,7 @@ from lightning.pytorch.strategies import FSDPStrategy
 from lightning.pytorch.loggers import WandbLogger
 from lightning.pytorch.callbacks import (
     ModelCheckpoint,
-    EarlyStopping,
     LearningRateMonitor,
-    DeviceStatsMonitor,
 )
 from lightning.pytorch.profilers import PyTorchProfiler
 from datasets import load_dataset
@@ -28,97 +22,10 @@ from core.model import CoreConfig, CoreType
 from core.config import AttentionConfig, FeedForwardConfig, LayerNormConfig, FeedForwardType
 from core.training.lightning_model import CoreLightningModel
 from core.optimizers.optimizer_utils import OptimizerName
+from core.training.training_config import TrainingConfig, MODEL_SIZES
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class ModelSizeConfig:
-    """Pre-defined model size configurations"""
-    n_layers: int
-    d_model: int
-    n_heads: int
-    ff_ratio: int = 4
-
-    def __post_init__(self):
-        if self.d_model % self.n_heads != 0:
-            raise ValueError(f"d_model ({self.d_model}) must be divisible by n_heads ({self.n_heads})")
-
-
-MODEL_SIZES = {
-    "small": ModelSizeConfig(n_layers=12, d_model=768, n_heads=12),
-    "medium": ModelSizeConfig(n_layers=24, d_model=1024, n_heads=16),
-    "large": ModelSizeConfig(n_layers=36, d_model=1280, n_heads=20),
-    "xl": ModelSizeConfig(n_layers=48, d_model=1600, n_heads=25),
-}
-
-
-@dataclass
-class TrainingConfig:
-    # Model configuration
-    model_size: str = "small"
-    transformer_type: str = "base"
-    sequence_length: int = 2048
-    vocab_size: Optional[int] = None
-    
-    # Training configuration
-    batch_size: int = 8
-    gradient_accumulation_steps: int = 4
-    max_epochs: int = 1
-    max_steps: Optional[int] = None
-    learning_rate: float = 3e-4
-    warmup_steps: int = 2000
-    weight_decay: float = 0.1
-    dropout: float = 0.0
-    
-    # Optimizer configuration
-    optimizer: str = "muon"
-    optimizer_kwargs: Dict[str, Any] = field(default_factory=dict)
-    lr_scheduler: str = "wsd"
-    lr_scheduler_kwargs: Dict[str, Any] = field(default_factory={"warmup_steps": 2000, "warmup_frac": 0.1, "cooldown_frac": 0.1})
-    
-    # Data configuration
-    dataset_name: str = "openwebtext"
-    dataset_config: Optional[str] = None
-    data_preprocessing_num_proc: int = 8
-    
-    # Hardware configuration
-    precision: str = "bf16-mixed"
-    strategy: str = "fsdp"
-    devices: Union[int, str] = "auto"
-    num_nodes: int = 1
-    
-    # Logging and checkpointing
-    project_name: str = "muon-8bit"
-    experiment_name: Optional[str] = None
-    save_dir: str = "./outputs"
-    log_every_n_steps: int = 50
-    val_check_interval: Union[int, float] = 0.25
-    save_top_k: int = 3
-    monitor_metric: str = "val_loss"
-    
-    # Profiling and debugging
-    enable_profiling: bool = False
-    enable_model_summary: bool = True
-    detect_anomaly: bool = False
-    
-    # Reproducibility
-    seed: int = 42
-    deterministic: bool = False
-
-    def __post_init__(self):
-        if self.model_size not in MODEL_SIZES:
-            raise ValueError(f"Unknown model size: {self.model_size}. Available: {list(MODEL_SIZES.keys())}")
-        
-        if self.optimizer not in [opt.value for opt in OptimizerName]:
-            raise ValueError(f"Unknown optimizer: {self.optimizer}. Available: {[opt.value for opt in OptimizerName]}")
-        
-        if self.transformer_type not in ["base", "normalized"]:
-            raise ValueError(f"Unknown transformer type: {self.transformer_type}")
-        
-        self.save_dir = Path(self.save_dir)
-        self.save_dir.mkdir(parents=True, exist_ok=True)
 
 
 class OpenWebTextDataset(Dataset):
@@ -144,15 +51,23 @@ class OpenWebTextDataModule(L.LightningDataModule):
         num_proc: int = 8,
         dataset_name: str = "openwebtext",
         dataset_config: Optional[str] = None,
+        max_train_size: Optional[int] = None,
+        max_val_size: Optional[int] = None,
+        enable_profiling: bool = False,
     ):
         super().__init__()
         self.tokenizer_name = tokenizer_name
         self.sequence_length = sequence_length
         self.batch_size = batch_size
-        self.num_proc = num_proc
+        # Disable multiprocessing when profiling to avoid serialization issues
+        self.num_proc = 1 if enable_profiling else num_proc
+        if enable_profiling and num_proc > 1:
+            logger.info(f"Profiling enabled: reducing num_proc from {num_proc} to 1 to avoid serialization issues")
         self.dataset_name = dataset_name
         self.dataset_config = dataset_config
-        
+        self.max_train_size = max_train_size
+        self.max_val_size = max_val_size
+        self.enable_profiling = enable_profiling
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -170,8 +85,15 @@ class OpenWebTextDataModule(L.LightningDataModule):
                 logger.warning(f"Failed to load {self.dataset_name}, falling back to wikitext-2-v1")
                 dataset = load_dataset("wikitext", "wikitext-2-v1")
             
-            train_size = min(len(dataset["train"]), 100000)
-            val_size = min(len(dataset.get("validation", dataset.get("test", dataset["train"]))), 5000)
+            if self.max_train_size is not None:
+                train_size = min(len(dataset["train"]), self.max_train_size)
+            else:
+                train_size = len(dataset["train"])
+            
+            if self.max_val_size is not None:
+                val_size = min(len(dataset.get("validation", dataset.get("test", dataset["train"]))), self.max_val_size)
+            else:
+                val_size = len(dataset.get("validation", dataset.get("test", dataset["train"])))
             
             train_dataset = dataset["train"].select(range(train_size))
             val_dataset = dataset.get("validation", dataset.get("test", dataset["train"])).select(range(val_size))
@@ -224,97 +146,6 @@ class OpenWebTextDataModule(L.LightningDataModule):
             persistent_workers=True,
         )
 
-
-class Model(CoreLightningModel):
-    def __init__(self, config: TrainingConfig, model_config: CoreConfig):
-        optimizer_kwargs = config.optimizer_kwargs.copy()
-        if config.transformer_type == "normalized" and config.optimizer in ["adamw", "adam"]:
-            optimizer_kwargs.setdefault("weight_decay", 0.0)
-        elif config.transformer_type == "base":
-            optimizer_kwargs.setdefault("weight_decay", config.weight_decay)
-
-        lr_scheduler_kwargs = config.lr_scheduler_kwargs.copy()
-        if config.lr_scheduler == "cosine_with_warmup":
-            lr_scheduler_kwargs.setdefault("warmup_steps", config.warmup_steps)
-            lr_scheduler_kwargs.setdefault("max_steps", config.max_steps or 10000)
-
-        super().__init__(
-            config=model_config,
-            learning_rate=config.learning_rate,
-            optimizer_name=OptimizerName(config.optimizer),
-            optimizer_kwargs=optimizer_kwargs,
-            lr_scheduler_name=config.lr_scheduler,
-            lr_scheduler_params=lr_scheduler_kwargs,
-        )
-        
-        self.config = config
-        self.gradient_accumulation_steps = config.gradient_accumulation_steps
-        self.automatic_optimization = False
-        
-        self.train_losses = []
-        self.val_losses = []
-
-    def training_step(self, batch, batch_idx):
-        optimizers = self.optimizers()
-        if not isinstance(optimizers, list):
-            optimizers = [optimizers]
-
-        if (batch_idx + 1) % self.gradient_accumulation_steps == 1:
-            for optimizer in optimizers:
-                optimizer.zero_grad()
-
-        input_ids, labels = batch
-        outputs = self.model(input_ids=input_ids, labels=labels)
-        loss = outputs.loss / self.gradient_accumulation_steps
-        
-        self.manual_backward(loss)
-        
-        if (batch_idx + 1) % self.gradient_accumulation_steps == 0:
-            torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
-            
-            for optimizer in optimizers:
-                optimizer.step()
-            
-            if hasattr(self.model, "post_optim_step"):
-                self.model.post_optim_step()
-
-            schedulers = self.lr_schedulers()
-            if not isinstance(schedulers, list):
-                schedulers = [schedulers]
-            for scheduler in schedulers:
-                scheduler.step()
-
-        actual_loss = loss * self.gradient_accumulation_steps
-        self.train_losses.append(actual_loss.item())
-        
-        self.log("train_loss", actual_loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-        self.log("learning_rate", self.optimizers().param_groups[0]["lr"] if not isinstance(self.optimizers(), list) else self.optimizers()[0].param_groups[0]["lr"], on_step=True, logger=True)
-        
-        return actual_loss
-
-    def validation_step(self, batch, batch_idx):
-        input_ids, labels = batch
-        outputs = self.model(input_ids=input_ids, labels=labels)
-        loss = outputs.loss
-        
-        self.val_losses.append(loss.item())
-        self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
-        
-        return loss
-
-    def on_train_epoch_end(self):
-        if self.train_losses:
-            avg_train_loss = sum(self.train_losses) / len(self.train_losses)
-            self.log("epoch_train_loss_avg", avg_train_loss, logger=True)
-            self.train_losses.clear()
-
-    def on_validation_epoch_end(self):
-        if self.val_losses:
-            avg_val_loss = sum(self.val_losses) / len(self.val_losses)
-            self.log("epoch_val_loss_avg", avg_val_loss, logger=True)
-            self.val_losses.clear()
-
-
 def create_model_config(training_config: TrainingConfig, vocab_size: int) -> CoreConfig:
     """Create model configuration from training config"""
     model_size = MODEL_SIZES[training_config.model_size]
@@ -345,36 +176,29 @@ def setup_callbacks(config: TrainingConfig) -> List:
     """Setup training callbacks"""
     callbacks = []
     
-    checkpoint_callback = ModelCheckpoint(
-        dirpath=config.save_dir / "checkpoints",
-        filename="best-{epoch:02d}-{val_loss:.4f}",
-        monitor=config.monitor_metric,
-        mode="min",
-        save_top_k=config.save_top_k,
-        save_last=True,
-        verbose=True,
-    )
-    callbacks.append(checkpoint_callback)
+    if not config.enable_profiling:
+        checkpoint_callback = ModelCheckpoint(
+            dirpath=config.save_dir / "checkpoints",
+            filename="best-{epoch:02d}-{val_loss:.4f}",
+            monitor=config.monitor_metric,
+            mode="min",
+            save_top_k=config.save_top_k,
+            save_last=True,
+            verbose=True,
+        )
+        callbacks.append(checkpoint_callback)
     
     lr_monitor = LearningRateMonitor(logging_interval="step")
     callbacks.append(lr_monitor)
     
-    device_stats = DeviceStatsMonitor()
-    callbacks.append(device_stats)
-    
-    if config.max_epochs > 5:
-        early_stopping = EarlyStopping(
-            monitor=config.monitor_metric,
-            mode="min",
-            patience=3,
-            verbose=True,
-        )
-        callbacks.append(early_stopping)
-    
     return callbacks
 
 
-def setup_logger(config: TrainingConfig) -> WandbLogger:
+def setup_logger(
+    config: TrainingConfig, 
+    num_devices: Optional[int] = None, 
+    num_iterations: Optional[int] = None
+) -> WandbLogger:
     """Setup WandB logger with comprehensive config"""
     model_size = MODEL_SIZES[config.model_size]
     
@@ -399,12 +223,12 @@ def setup_logger(config: TrainingConfig) -> WandbLogger:
         "weight_decay": config.weight_decay,
         "max_epochs": config.max_epochs,
         "max_steps": config.max_steps,
-        "warmup_steps": config.warmup_steps,
         
         # Optimizer config
         "optimizer": config.optimizer,
         "optimizer_kwargs": config.optimizer_kwargs,
         "lr_scheduler": config.lr_scheduler,
+        "lr_scheduler_kwargs": config.lr_scheduler_kwargs,
         
         # Hardware config
         "precision": config.precision,
@@ -415,7 +239,16 @@ def setup_logger(config: TrainingConfig) -> WandbLogger:
         # Data config
         "dataset": config.dataset_name,
         "dataset_config": config.dataset_config,
+        "max_train_size": config.max_train_size,
+        "max_val_size": config.max_val_size,
     }
+    
+    if num_devices is not None:
+        wandb_config["num_devices"] = num_devices
+        wandb_config["effective_batch_size_total"] = config.batch_size * config.gradient_accumulation_steps * num_devices
+    
+    if num_iterations is not None:
+        wandb_config["num_iterations"] = num_iterations
     
     return WandbLogger(
         project=config.project_name,
@@ -424,6 +257,68 @@ def setup_logger(config: TrainingConfig) -> WandbLogger:
         save_dir=str(config.save_dir),
         log_model=False,
     )
+
+
+def calculate_num_iterations(
+    dataset_size: int,
+    batch_size: int,
+    gradient_accumulation_steps: int,
+    num_devices: int,
+    max_epochs: int,
+    max_steps: int = -1,
+) -> int:
+    """Calculate the total number of optimizer steps for training.
+    
+    Args:
+        dataset_size: Total number of samples in the training dataset
+        batch_size: Batch size per device
+        gradient_accumulation_steps: Number of gradient accumulation steps
+        num_devices: Total number of devices (GPUs) being used
+        max_epochs: Maximum number of epochs
+        max_steps: Maximum number of steps (if > 0, overrides epoch-based calculation)
+        
+    Returns:
+        Total number of optimizer steps
+    """
+    effective_batch_size = batch_size * gradient_accumulation_steps * num_devices
+    steps_per_epoch = dataset_size // effective_batch_size
+    
+    if max_steps > 0:
+        epoch_based_steps = steps_per_epoch * max_epochs
+        total_steps = min(max_steps, epoch_based_steps)
+    else:
+        total_steps = steps_per_epoch * max_epochs
+    
+    logger.info(f"Training steps calculation:")
+    logger.info(f"  Dataset size: {dataset_size:,}")
+    logger.info(f"  Effective batch size: {effective_batch_size} (batch_size={batch_size} × grad_accum={gradient_accumulation_steps} × devices={num_devices})")
+    logger.info(f"  Steps per epoch: {steps_per_epoch}")
+    logger.info(f"  Max epochs: {max_epochs}")
+    if max_steps > 0:
+        logger.info(f"  Max steps limit: {max_steps}")
+    logger.info(f"  Total training steps: {total_steps}")
+    
+    return total_steps
+
+
+def get_num_devices(devices: Union[int, str], num_nodes: int) -> int:
+    """Get the total number of devices being used for training."""
+    if isinstance(devices, int):
+        return devices * num_nodes
+    elif devices == "auto":
+        if torch.cuda.is_available():
+            return torch.cuda.device_count() * num_nodes
+        else:
+            return 1 * num_nodes
+    elif devices == "-1":
+        if torch.cuda.is_available():
+            return torch.cuda.device_count() * num_nodes
+        else:
+            return 1 * num_nodes
+    else:
+        devices_str = str(devices).strip("[]")
+        device_list = [d.strip() for d in devices_str.split(",") if d.strip()]
+        return len(device_list) * num_nodes
 
 
 def setup_strategy(config: TrainingConfig):
@@ -448,20 +343,22 @@ def main():
                        help="Model size configuration")
     parser.add_argument("--optimizer", type=str, default="muon", choices=[opt.value for opt in OptimizerName],
                        help="Optimizer to use")
-    parser.add_argument("--transformer-type", type=str, default="normalized", choices=["base", "normalized"],
+    parser.add_argument("--transformer-type", type=str, default="base", choices=["base", "normalized"],
                        help="Transformer architecture type")
-    parser.add_argument("--batch-size", type=int, default=8, help="Batch size per device")
-    parser.add_argument("--gradient-accumulation-steps", type=int, default=4, help="Gradient accumulation steps")
+    parser.add_argument("--batch-size", type=int, default=12, help="Batch size per device")
+    parser.add_argument("--max-train-size", type=int, default=None, help="Maximum number of training samples")
+    parser.add_argument("--max-val-size", type=int, default=None, help="Maximum number of validation samples")
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=1, help="Gradient accumulation steps")
     parser.add_argument("--learning-rate", type=float, default=3e-4, help="Learning rate")
     parser.add_argument("--max-epochs", type=int, default=1, help="Maximum number of epochs")
-    parser.add_argument("--max-steps", type=int, help="Maximum number of steps (overrides epochs)")
+    parser.add_argument("--max-steps", type=int, default=-1, help="Maximum number of steps (overrides epochs)")
     parser.add_argument("--sequence-length", type=int, default=2048, help="Sequence length")
-    parser.add_argument("--project-name", type=str, default="gpt-optimizer-comparison", help="WandB project name")
+    parser.add_argument("--project-name", type=str, default="muon-8bit", help="WandB project name")
     parser.add_argument("--experiment-name", type=str, help="Experiment name for logging")
     parser.add_argument("--save-dir", type=str, default="./outputs", help="Directory to save outputs")
     parser.add_argument("--devices", type=str, default="auto", help="Devices to use")
     parser.add_argument("--num-nodes", type=int, default=1, help="Number of nodes")
-    parser.add_argument("--strategy", type=str, default="fsdp", choices=["fsdp", "ddp", "auto"],
+    parser.add_argument("--strategy", type=str, default="auto", choices=["fsdp", "ddp", "auto"],
                        help="Distributed strategy")
     parser.add_argument("--precision", type=str, default="bf16-mixed", help="Training precision")
     parser.add_argument("--enable-profiling", action="store_true", help="Enable PyTorch profiling")
@@ -469,7 +366,6 @@ def main():
     
     args = parser.parse_args()
     
-    # Create training configuration
     config = TrainingConfig(
         model_size=args.model_size,
         optimizer=args.optimizer,
@@ -479,6 +375,8 @@ def main():
         learning_rate=args.learning_rate,
         max_epochs=args.max_epochs,
         max_steps=args.max_steps,
+        max_train_size=args.max_train_size,
+        max_val_size=args.max_val_size,
         sequence_length=args.sequence_length,
         project_name=args.project_name,
         experiment_name=args.experiment_name,
@@ -501,15 +399,39 @@ def main():
         num_proc=config.data_preprocessing_num_proc,
         dataset_name=config.dataset_name,
         dataset_config=config.dataset_config,
+        max_train_size=config.max_train_size,
+        max_val_size=config.max_val_size,
+        enable_profiling=config.enable_profiling,
     )
     
     data_module.setup("fit")
     vocab_size = data_module.tokenizer.vocab_size
     
+    # Calculate num_iterations for learning rate schedulers that need it
+    num_devices = get_num_devices(config.devices, config.num_nodes)
+    dataset_size = len(data_module.train_dataset)
+    
+    num_iterations = calculate_num_iterations(
+        dataset_size=dataset_size,
+        batch_size=config.batch_size,
+        gradient_accumulation_steps=config.gradient_accumulation_steps,
+        num_devices=num_devices,
+        max_epochs=config.max_epochs,
+        max_steps=config.max_steps,
+    )
+    
+    updated_lr_scheduler_kwargs = config.lr_scheduler_kwargs.copy()
+    if config.lr_scheduler in ["wsd", "cosine_with_warmup"]:
+        updated_lr_scheduler_kwargs["num_iterations"] = num_iterations
+        logger.info(f"Added num_iterations={num_iterations} to {config.lr_scheduler} scheduler kwargs")
+    
     model_config = create_model_config(config, vocab_size)
     logger.info(f"Model config: {model_config}")
     
-    model = Model(config, model_config)
+    from dataclasses import replace
+    model_training_config = replace(config, lr_scheduler_kwargs=updated_lr_scheduler_kwargs)
+    
+    model = CoreLightningModel(training_config=model_training_config, config=model_config)
     
     total_params = model.model.num_parameters()
     trainable_params = model.model.num_trainable_parameters()
@@ -517,7 +439,7 @@ def main():
     logger.info(f"Trainable parameters: {trainable_params:,}")
     
     callbacks = setup_callbacks(config)
-    wandb_logger = setup_logger(config)
+    wandb_logger = setup_logger(config, num_devices=num_devices, num_iterations=num_iterations)
     strategy = setup_strategy(config)
     
     profiler = None
@@ -545,7 +467,6 @@ def main():
         enable_model_summary=config.enable_model_summary,
         deterministic=config.deterministic,
         detect_anomaly=config.detect_anomaly,
-        gradient_clip_val=1.0,
     )
     
     try:
@@ -553,9 +474,10 @@ def main():
         trainer.fit(model, data_module)
         logger.info("Training completed successfully!")
         
-        final_model_path = config.save_dir / "final_model.pt"
-        torch.save(model.model.state_dict(), final_model_path)
-        logger.info(f"Final model saved to {final_model_path}")
+        if not config.enable_profiling:
+            final_model_path = config.save_dir / "final_model.pt"
+            torch.save(model.model.state_dict(), final_model_path)
+            logger.info(f"Final model saved to {final_model_path}")
         
         if wandb.run:
             wandb.log({

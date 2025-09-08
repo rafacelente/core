@@ -26,14 +26,13 @@ def warmup_then_stable_then_decay_lr(
     cooldown_frac: float,
     warmup_frac: float,
 ) -> float:
-    t = 1 - it / num_iterations # time remaining in training
-    assert 1 >= t > 0
+    t = it / num_iterations
     if t < warmup_frac:
         return t / warmup_frac
-    elif t < cooldown_frac:
+    elif t < (1 - cooldown_frac):
         return 1.0
     else:
-        return 1.0 - (t - cooldown_frac) / (1 - cooldown_frac)
+        return (1 - t) / (1 - cooldown_frac)
 
 LR_SCHEDULER_FUNCTION_MAPPING: dict[str, Callable] = {
     "stable_then_decay": stable_then_decay_lr,
