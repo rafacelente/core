@@ -69,20 +69,20 @@ class CoreLightningModel(L.LightningModule):
         loss = outputs.loss
         
         self.val_losses.append(loss.item())
-        self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
         
         return loss
 
     def on_train_epoch_end(self):
         if self.train_losses:
             avg_train_loss = sum(self.train_losses) / len(self.train_losses)
-            self.log("epoch_train_loss_avg", avg_train_loss, logger=True)
+            self.log("epoch_train_loss_avg", avg_train_loss, logger=True, sync_dist=True)
             self.train_losses.clear()
 
     def on_validation_epoch_end(self):
         if self.val_losses:
             avg_val_loss = sum(self.val_losses) / len(self.val_losses)
-            self.log("epoch_val_loss_avg", avg_val_loss, logger=True)
+            self.log("epoch_val_loss_avg", avg_val_loss, logger=True, sync_dist=True)
             self.val_losses.clear()
 
     def configure_optimizers(self):

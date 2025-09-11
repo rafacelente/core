@@ -255,7 +255,7 @@ def setup_logger(
         name=run_name,
         config=wandb_config,
         save_dir=str(config.save_dir),
-        log_model=False,
+        log_model=True,
     )
 
 
@@ -365,6 +365,13 @@ def main():
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     
     args = parser.parse_args()
+
+    accelerator_name = torch.cuda.get_device_name(0)
+    accelerator_name = accelerator_name.replace(" ", "_")
+    accelerator_count = torch.cuda.device_count()
+
+    if args.experiment_name is None:
+        args.experiment_name = f"{args.model_size}-{args.optimizer}-{accelerator_name}-{accelerator_count}"
     
     config = TrainingConfig(
         model_size=args.model_size,
