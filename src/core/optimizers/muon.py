@@ -195,7 +195,16 @@ class Muon(torch.optim.Optimizer):
 
 
 def configure_muon(
-    model: torch.nn.Module, lr: float, betas: tuple[float, float] = (0.9, 0.999), weight_decay: float = 0.01, print_param_names: bool = True
+    model: torch.nn.Module,
+    lr: float,
+    muon_momentum: float = 0.95,
+    muon_nesterov: bool = True,
+    adamw_betas: tuple[float, float] = (0.9, 0.999),
+    weight_decay: float = 0.01,
+    rms_update_ratio: float = 0.2,
+    skip_adjust_lr: bool = False,
+    ns_steps: int = 5,
+    print_param_names: bool = False
 ) -> list[torch.optim.Optimizer]:
     """
     Helper function to configure Muon optimizer for language/transactional model training with
@@ -204,8 +213,14 @@ def configure_muon(
     Args:
         model: The model to configure the optimizer for.
         lr: The learning rate for the optimizer.
-        betas: The betas for the AdamW optimizer.
+        adamw_betas: The betas for the AdamW optimizer.
+        muon_momentum: The momentum for the Muon optimizer.
+        muon_nesterov: Whether to use Nesterov-style momentum in the Muon optimizer.
         weight_decay: The weight decay for the AdamW optimizer.
+        skip_adjust_lr: Whether to skip adjusting the learning rate for the Muon optimizer.
+        ns_steps: The number of Newton-Schulz iterations to run for the Muon optimizer.
+        print_param_names: Whether to print the names of the parameters in the Muon and AdamW optimizers.
+        rms_update_ratio: The RMS update ratio for the Muon optimizer.
     """
     embed_params: list[torch.nn.Parameter] = []
     lm_head_params: list[torch.nn.Parameter] = []
@@ -217,7 +232,7 @@ def configure_muon(
     scalar_param_names: list[str] = []
     muon_param_names: list[str] = []
 
-    for possible_attr in ("embed", "embeddings", "wte"):
+    for possible_attr in ("embed", "embeddings", "wte", "embed_tokens"):
         if hasattr(model, possible_attr):
             params = list(getattr(model, possible_attr).parameters())
             embed_params.extend(params)
@@ -258,12 +273,12 @@ def configure_muon(
         lr=lr,
         wd=weight_decay,
         muon_params=matrix_params,
-        momentum=0.95,
-        nesterov=True,
-        ns_steps=5,
+        momentum=muon_momentum,
+        nesterov=muon_nesterov,
+        ns_steps=ns_steps,
         adamw_params=adamw_params,
-        adamw_betas=betas,
+        adamw_betas=adamw_betas,
         adamw_eps=1e-8,
-        rms_update_ratio=0.2,
-        skip_adjust_lr=False,
+        rms_update_ratio=rms_update_ratio,
+        skip_adjust_lr=skip_adjust_lr,
     )
