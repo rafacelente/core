@@ -293,8 +293,9 @@ class NormalizedCoreModel(CoreModel):
         for block in self.blocks.values():
             block = cast(NormalizedBlock, block)
             att = cast(NormalizedAttention, block.attention)
-            self._normalize_matrix(att.w_q.weight)
-            self._normalize_matrix(att.w_k.weight)
+            ff = block.feed_forward
+            att.normalize_matrices()
+            ff.normalize_matrices()
 
     def forward(
         self,
