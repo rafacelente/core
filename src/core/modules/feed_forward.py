@@ -14,6 +14,7 @@ class ActivationType(str, Enum):
     RELU = "relu"
     GELU = "gelu"
     SILU = "silu"
+    SIGMOID = "sigmoid"
 
 
 class FeedForwardType(str, Enum):
@@ -39,6 +40,8 @@ class Activation(nn.Module):
             return cast(Activation, nn.GELU())
         elif type == ActivationType.SILU:
             return cast(Activation, nn.SiLU())
+        elif type == ActivationType.SIGMOID:
+            return cast(Activation, nn.Sigmoid())
         else:
             raise ValueError(f"Invalid activation type: {type}")
 

@@ -11,6 +11,8 @@ from core.modules.layer_norm import LayerNorm, LayerNormType
 from core.modules.rope import RoPE, RoPEType
 from core.utils import BufferCache
 
+from core.modules.feed_forward import Activation, ActivationType
+
 class AttentionType(str, Enum):
     DEFAULT = "default"
     NORMALIZED = "normalized"
@@ -27,6 +29,8 @@ class DefaultAttention(nn.Module):
         qk_norm_type: Optional[LayerNormType] = None,
         dropout: float = 0.0,
         cache: Optional[BufferCache] = None,
+        use_post_sdpa_gate: bool = False,
+        gate_activation_type: ActivationType = ActivationType.SIGMOID,
     ):
         super().__init__()
         self.d_model = d_model
@@ -47,6 +51,10 @@ class DefaultAttention(nn.Module):
         if self.use_rope:
             self.rope = RoPE.build(type=self.rope_type, head_size=self.head_dim, cache=cache)
         self._setup_qk_norm()
+
+        if self.use_post_sdpa_gate:
+            self.post_sdpa_gate = nn.Linear(d_model, d_model, bias=False)
+            self.gate_activation = Activation.build(gate_activation_type)
 
     def _setup_qk_norm(self) -> None:
         self.q_norm: Optional[LayerNorm] = None
@@ -90,7 +98,12 @@ class DefaultAttention(nn.Module):
         if self.use_rope:
             q, k = self.rope(q, k, pos_sin, pos_cos)
         att = self.sdpa(q, k, v)
+
+        if self.use_post_sdpa_gate:
+            att = att * self.gate_activation(self.self.post_sdpa_gate(att))
+
         att = att.view(bs, seq_len, -1)
+
         return self.w_o(att)
 
 
