@@ -1,7 +1,8 @@
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Union
 from pathlib import Path
-from src.core.optimizers.optimizer_utils import OptimizerName
+from core.optimizers.optimizer_utils import OptimizerName
+from core.modules.feed_forward import ActivationType
 
 
 @dataclass
@@ -136,6 +137,8 @@ class TrainingConfig:
     # Model configuration
     model_type: str = "gpt-small"
     transformer_type: str = "base"
+    use_post_sdpa_gate: bool = False
+    gate_activation_type: ActivationType = ActivationType.SIGMOID
     sequence_length: int = 2048
     vocab_size: Optional[int] = None
     
@@ -173,7 +176,7 @@ class TrainingConfig:
     experiment_name: Optional[str] = None
     save_dir: str = "./outputs"
     log_every_n_steps: int = 50
-    val_check_interval: Union[int, float] = 0.5
+    val_check_interval: Union[int, float] = 0.1
     save_top_k: int = 1
     monitor_metric: str = "val_loss"
     

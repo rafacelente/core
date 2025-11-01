@@ -42,6 +42,7 @@ class DefaultAttention(nn.Module):
         self.qk_norm_type = qk_norm_type
         self.head_dim = d_model // n_heads
         self.dropout_p = dropout
+        self.use_post_sdpa_gate = use_post_sdpa_gate
         self.dropout = nn.Dropout(dropout) if dropout > 0.0 else nn.Identity()
         self.w_q = nn.Linear(d_model, d_model, bias=False)
         self.w_k = nn.Linear(d_model, d_model, bias=False)
@@ -99,10 +100,10 @@ class DefaultAttention(nn.Module):
             q, k = self.rope(q, k, pos_sin, pos_cos)
         att = self.sdpa(q, k, v)
 
-        if self.use_post_sdpa_gate:
-            att = att * self.gate_activation(self.self.post_sdpa_gate(att))
-
         att = att.view(bs, seq_len, -1)
+
+        if self.use_post_sdpa_gate:
+            att = att * self.gate_activation(self.post_sdpa_gate(att))
 
         return self.w_o(att)
 
@@ -119,6 +120,8 @@ class NormalizedAttention(DefaultAttention):
         qk_norm_type: Optional[LayerNormType] = None,
         dropout: float = 0.0,
         cache: Optional[BufferCache] = None,
+        use_post_sdpa_gate: bool = False,
+        gate_activation_type: ActivationType = ActivationType.SIGMOID,
     ):
         super().__init__(d_model, n_heads, n_kv_heads, use_rope, rope_type, clip_qkv, qk_norm_type, dropout, cache)
         self.sq_init_value = 1.0
@@ -182,6 +185,8 @@ class Attention(nn.Module):
         qk_norm_type: Optional[LayerNormType] = None,
         dropout: float = 0.0,
         cache: Optional[BufferCache] = None,
+        use_post_sdpa_gate: bool = False,
+        gate_activation_type: ActivationType = ActivationType.SIGMOID,
     ):
         super().__init__()
     

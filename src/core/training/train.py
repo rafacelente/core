@@ -171,6 +171,8 @@ def create_model_config(training_config: TrainingConfig, vocab_size: int) -> Cor
             n_kv_heads=model_type.n_kv_heads,
             dropout=training_config.dropout,
             use_rope=model_type.use_rope,
+            use_post_sdpa_gate=training_config.use_post_sdpa_gate,
+            gate_activation_type=training_config.gate_activation_type,
         ),
         feed_forward=feed_forward_config,
         layer_norm=LayerNormConfig(layer_norm_type=model_type.ln_type, eps=1e-5),
@@ -354,6 +356,8 @@ def main():
                        help="Optimizer to use")
     parser.add_argument("--transformer-type", type=str, default="base", choices=["base", "normalized"],
                        help="Transformer architecture type")
+    parser.add_argument("--use-post-sdpa-gate", action="store_true", help="Use post SDPA gate")
+    parser.add_argument("--gate-activation-type", type=str, default="sigmoid", choices=["sigmoid", "gelu", "relu"], help="Gate activation type")
     parser.add_argument("--batch-size", type=int, default=12, help="Batch size per device")
     parser.add_argument("--max-train-size", type=int, default=None, help="Maximum number of training samples")
     parser.add_argument("--max-val-size", type=int, default=None, help="Maximum number of validation samples")
@@ -386,6 +390,8 @@ def main():
         model_type=args.model_type,
         optimizer=args.optimizer,
         transformer_type=args.transformer_type,
+        use_post_sdpa_gate=args.use_post_sdpa_gate,
+        gate_activation_type=args.gate_activation_type,
         batch_size=args.batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         learning_rate=args.learning_rate,

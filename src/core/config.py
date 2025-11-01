@@ -101,6 +101,8 @@ class AttentionConfig(BaseModel):
     clip_qkv: Optional[float] = None
     qk_norm_type: Optional[LayerNormType] = None
     dropout: float = 0.0
+    use_post_sdpa_gate: bool = False,
+    gate_activation_type: ActivationType = ActivationType.SIGMOID,
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
     @property
@@ -125,4 +127,6 @@ class AttentionConfig(BaseModel):
             qk_norm_type=self.qk_norm_type,
             dropout=self.dropout,
             cache=cache,
+            use_post_sdpa_gate=self.use_post_sdpa_gate,
+            gate_activation_type=self.gate_activation_type
         )
