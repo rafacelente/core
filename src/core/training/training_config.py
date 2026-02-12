@@ -1,6 +1,9 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import Any, Dict, Optional, Union
 from pathlib import Path
+
+import yaml
+
 from core.optimizers.optimizer_utils import OptimizerName
 from core.modules.feed_forward import ActivationType
 from core.models.model_recipes import ModelRecipe
@@ -77,3 +80,81 @@ class TrainingConfig:
         
         self.save_dir = Path(self.save_dir)
         self.save_dir.mkdir(parents=True, exist_ok=True)
+
+    @classmethod
+    def from_yaml(cls, path: str) -> "TrainingConfig":
+        """Load a TrainingConfig from a YAML file.
+
+        The YAML file may use a nested structure with the following top-level
+        sections that map to groups of fields on this dataclass:
+
+            model:      model_type, transformer_type, use_post_sdpa_gate,
+                        gate_activation_type, sequence_length, vocab_size
+            training:   batch_size, gradient_accumulation_steps, max_epochs,
+                        max_steps, learning_rate, weight_decay, dropout,
+                        max_grad_norm
+            optimizer:  optimizer, optimizer_kwargs, lr_scheduler,
+                        lr_scheduler_kwargs
+            data:       dataset_name, dataset_config, data_preprocessing_num_proc,
+                        max_train_size, max_val_size
+            hardware:   precision, strategy, devices, num_nodes
+            logging:    project_name, experiment_name, save_dir,
+                        log_every_n_steps, val_check_interval, save_top_k,
+                        monitor_metric, log_model
+            profiling:  enable_profiling, enable_model_summary, detect_anomaly
+            reproducibility: seed, deterministic
+
+        Flat key-value pairs at the top level are also accepted and are applied
+        directly to the corresponding dataclass fields.
+        """
+        with open(path, "r") as f:
+            raw = yaml.safe_load(f)
+
+        if raw is None:
+            return cls()
+
+        flat: Dict[str, Any] = {}
+        valid_field_names = {f.name for f in fields(cls)}
+
+        for key, value in raw.items():
+            if isinstance(value, dict):
+                # Nested section – merge its children as flat keys
+                for sub_key, sub_value in value.items():
+                    if sub_key in valid_field_names:
+                        flat[sub_key] = sub_value
+            else:
+                if key in valid_field_names:
+                    flat[key] = value
+
+        return cls(**flat)
+
+    @classmethod
+    def from_yaml_with_overrides(
+        cls,
+        path: str,
+        overrides: Dict[str, Any],
+    ) -> "TrainingConfig":
+        """Load from YAML, then apply CLI overrides on top.
+
+        *overrides* should contain only those keys the user explicitly
+        provided on the command line (i.e. values that are not at their
+        argparse default).  They take precedence over the YAML values.
+        """
+        with open(path, "r") as f:
+            raw = yaml.safe_load(f) or {}
+
+        flat: Dict[str, Any] = {}
+        valid_field_names = {f.name for f in fields(cls)}
+
+        for key, value in raw.items():
+            if isinstance(value, dict):
+                for sub_key, sub_value in value.items():
+                    if sub_key in valid_field_names:
+                        flat[sub_key] = sub_value
+            else:
+                if key in valid_field_names:
+                    flat[key] = value
+
+        # CLI overrides take precedence
+        flat.update(overrides)
+        return cls(**flat)

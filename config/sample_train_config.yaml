@@ -1,0 +1,57 @@
+model:
+  model_type: gpt-small            # one of: gpt-tiny, gpt-small, gpt-medium,
+                                    #         gpt-large, gpt-xl, gpt-2.7b,
+                                    #         llama-small, llama-medium, llama-large
+  transformer_type: base            # "base" or "normalized"
+  sequence_length: 2048
+  use_post_sdpa_gate: false
+  gate_activation_type: sigmoid     # "sigmoid", "gelu", or "relu"
+
+training:
+  batch_size: 12
+  gradient_accumulation_steps: 1
+  learning_rate: 3.0e-4
+  weight_decay: 0.1
+  dropout: 0.0
+  max_grad_norm: 1.0
+  max_epochs: 1
+  max_steps: -1                     # set > 0 to cap total optimizer steps
+
+optimizer:
+  optimizer: muon                   # one of: adam, adamw, muon, sgd
+  lr_scheduler: wsd                 # learning-rate scheduler name
+  lr_scheduler_kwargs:
+    warmup_frac: 0.1
+    cooldown_frac: 0.1
+
+data:
+  dataset_name: "HuggingFaceFW/fineweb-edu"
+  dataset_config: "sample-10BT"
+  data_preprocessing_num_proc: 8
+  max_train_size: null              # null means use the full dataset
+  max_val_size: null
+
+hardware:
+  precision: bf16-mixed
+  strategy: auto                    # "fsdp", "ddp", or "auto"
+  devices: auto                     # "auto", integer, or comma-separated ids
+  num_nodes: 1
+
+logging:
+  project_name: muon-8bit
+  experiment_name: null             # null to auto-generate from model/optimizer/GPU
+  save_dir: ./outputs
+  log_every_n_steps: 50
+  val_check_interval: 0.1
+  save_top_k: 1
+  monitor_metric: val_loss
+  log_model: false
+
+profiling:
+  enable_profiling: false
+  enable_model_summary: true
+  detect_anomaly: false
+
+reproducibility:
+  seed: 42
+  deterministic: false

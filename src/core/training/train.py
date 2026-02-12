@@ -13,9 +13,6 @@ from lightning.pytorch.callbacks import (
     LearningRateMonitor,
 )
 from lightning.pytorch.profilers import PyTorchProfiler
-from datasets import load_dataset
-from torch.utils.data import DataLoader, Dataset
-from transformers import AutoTokenizer
 import wandb
 
 from core.models.model_config import CoreConfig
@@ -23,128 +20,11 @@ from core.training.lightning_model import CoreLightningModel
 from core.optimizers.optimizer_utils import OptimizerName
 from core.training.training_config import TrainingConfig
 from core.models.model_recipes import ModelRecipe
+from core.training.data.fineweb import FineWebDataModule
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-
-class OpenWebTextDataset(Dataset):
-    def __init__(self, tokenized_data, sequence_length: int):
-        self.data = tokenized_data
-        self.sequence_length = sequence_length
-
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, idx):
-        item = self.data[idx]
-        input_ids = torch.tensor(item["input_ids"], dtype=torch.long)
-        return input_ids, input_ids.clone()
-
-
-class OpenWebTextDataModule(L.LightningDataModule):
-    def __init__(
-        self,
-        tokenizer_name: str = "gpt2",
-        sequence_length: int = 2048,
-        batch_size: int = 8,
-        num_proc: int = 8,
-        dataset_name: str = "openwebtext",
-        dataset_config: Optional[str] = None,
-        max_train_size: Optional[int] = None,
-        max_val_size: Optional[int] = None,
-        enable_profiling: bool = False,
-    ):
-        super().__init__()
-        self.tokenizer_name = tokenizer_name
-        self.sequence_length = sequence_length
-        self.batch_size = batch_size
-        # Disable multiprocessing when profiling to avoid serialization issues
-        self.num_proc = 1 if enable_profiling else num_proc
-        if enable_profiling and num_proc > 1:
-            logger.info(f"Profiling enabled: reducing num_proc from {num_proc} to 1 to avoid serialization issues")
-        self.dataset_name = dataset_name
-        self.dataset_config = dataset_config
-        self.max_train_size = max_train_size
-        self.max_val_size = max_val_size
-        self.enable_profiling = enable_profiling
-        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
-
-    def setup(self, stage: Optional[str] = None):
-        if stage == "fit" or stage is None:
-            logger.info(f"Loading dataset: {self.dataset_name}")
-            
-            try:
-                if self.dataset_config:
-                    dataset = load_dataset(self.dataset_name, self.dataset_config)
-                else:
-                    dataset = load_dataset(self.dataset_name)
-            except Exception as e:
-                logger.warning(f"Failed to load {self.dataset_name}, falling back to wikitext-2-v1")
-                dataset = load_dataset("wikitext", "wikitext-2-v1")
-            
-            if self.max_train_size is not None:
-                train_size = min(len(dataset["train"]), self.max_train_size)
-            else:
-                train_size = len(dataset["train"])
-            
-            if self.max_val_size is not None:
-                val_size = min(len(dataset.get("validation", dataset.get("test", dataset["train"]))), self.max_val_size)
-            else:
-                val_size = len(dataset.get("validation", dataset.get("test", dataset["train"])))
-            
-            train_dataset = dataset["train"].select(range(train_size))
-            val_dataset = dataset.get("validation", dataset.get("test", dataset["train"])).select(range(val_size))
-            
-            logger.info(f"Tokenizing {len(train_dataset)} training examples...")
-            self.train_dataset = self._prepare_dataset(train_dataset)
-            
-            logger.info(f"Tokenizing {len(val_dataset)} validation examples...")
-            self.val_dataset = self._prepare_dataset(val_dataset)
-            
-            logger.info(f"Dataset preparation complete")
-
-    def _prepare_dataset(self, dataset):
-        def tokenize_function(examples):
-            return self.tokenizer(
-                examples["text"],
-                truncation=True,
-                padding="max_length",
-                max_length=self.sequence_length,
-                return_tensors=None,
-            )
-
-        tokenized_dataset = dataset.map(
-            tokenize_function,
-            batched=True,
-            num_proc=self.num_proc,
-            remove_columns=dataset.column_names,
-            desc="Tokenizing",
-        )
-        
-        return OpenWebTextDataset(tokenized_dataset, self.sequence_length)
-
-    def train_dataloader(self):
-        return DataLoader(
-            self.train_dataset,
-            batch_size=self.batch_size,
-            shuffle=True,
-            num_workers=min(4, os.cpu_count() or 1),
-            pin_memory=True,
-            persistent_workers=True,
-        )
-
-    def val_dataloader(self):
-        return DataLoader(
-            self.val_dataset,
-            batch_size=self.batch_size,
-            shuffle=False,
-            num_workers=min(4, os.cpu_count() or 1),
-            pin_memory=True,
-            persistent_workers=True,
-        )
 
 def create_model_config(training_config: TrainingConfig, vocab_size: int) -> CoreConfig:
     """Create model configuration from training config using the model recipe registry."""
@@ -322,91 +202,145 @@ def setup_strategy(config: TrainingConfig):
         return config.strategy
 
 
-def main():
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the argument parser for the training script.
+
+    All CLI arguments use ``default=None`` (except boolean flags which use
+    ``store_true``) so that we can distinguish between "user explicitly set
+    this" and "user left the default" when merging with a YAML config file.
+    """
     parser = argparse.ArgumentParser(description="Distributed training script for GPT-style models")
-    parser.add_argument("--model-type", type=str, default="gpt-small", choices=ModelRecipe.get_available_recipes(),
-                       help="Model type configuration")
-    parser.add_argument("--optimizer", type=str, default="muon", choices=[opt.value for opt in OptimizerName],
-                       help="Optimizer to use")
-    parser.add_argument("--transformer-type", type=str, default="base", choices=["base", "normalized"],
-                       help="Transformer architecture type")
-    parser.add_argument("--use-post-sdpa-gate", action="store_true", help="Use post SDPA gate")
-    parser.add_argument("--gate-activation-type", type=str, default="sigmoid", choices=["sigmoid", "gelu", "relu"], help="Gate activation type")
-    parser.add_argument("--batch-size", type=int, default=12, help="Batch size per device")
+
+    # YAML configuration file ---------------------------------------------------
+    parser.add_argument("--config", type=str, default=None,
+                       help="Path to a YAML configuration file. CLI arguments override YAML values.")
+
+    # Model configuration -------------------------------------------------------
+    parser.add_argument("--model-type", type=str, default=None, choices=ModelRecipe.get_available_recipes(),
+                       help="Model type configuration (default: gpt-small)")
+    parser.add_argument("--optimizer", type=str, default=None, choices=[opt.value for opt in OptimizerName],
+                       help="Optimizer to use (default: muon)")
+    parser.add_argument("--transformer-type", type=str, default=None, choices=["base", "normalized"],
+                       help="Transformer architecture type (default: base)")
+    parser.add_argument("--use-post-sdpa-gate", action="store_true", default=None, help="Use post SDPA gate")
+    parser.add_argument("--gate-activation-type", type=str, default=None, choices=["sigmoid", "gelu", "relu"],
+                       help="Gate activation type (default: sigmoid)")
+
+    # Training configuration ----------------------------------------------------
+    parser.add_argument("--batch-size", type=int, default=None, help="Batch size per device (default: 12)")
     parser.add_argument("--max-train-size", type=int, default=None, help="Maximum number of training samples")
     parser.add_argument("--max-val-size", type=int, default=None, help="Maximum number of validation samples")
-    parser.add_argument("--gradient-accumulation-steps", type=int, default=1, help="Gradient accumulation steps")
-    parser.add_argument("--learning-rate", type=float, default=3e-4, help="Learning rate")
-    parser.add_argument("--max-epochs", type=int, default=1, help="Maximum number of epochs")
-    parser.add_argument("--max-steps", type=int, default=-1, help="Maximum number of steps (overrides epochs)")
-    parser.add_argument("--sequence-length", type=int, default=2048, help="Sequence length")
-    parser.add_argument("--project-name", type=str, default="muon-8bit", help="WandB project name")
-    parser.add_argument("--experiment-name", type=str, help="Experiment name for logging")
-    parser.add_argument("--save-dir", type=str, default="./outputs", help="Directory to save outputs")
-    parser.add_argument("--devices", type=str, default="auto", help="Devices to use")
-    parser.add_argument("--num-nodes", type=int, default=1, help="Number of nodes")
-    parser.add_argument("--strategy", type=str, default="auto", choices=["fsdp", "ddp", "auto"],
-                       help="Distributed strategy")
-    parser.add_argument("--precision", type=str, default="bf16-mixed", help="Training precision")
-    parser.add_argument("--enable-profiling", action="store_true", help="Enable PyTorch profiling")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--log-model", action="store_true", help="Log model")
-    parser.add_argument("--log-every-n-steps", type=int, default=50, help="Log every n steps")
-    parser.add_argument("--val-check-interval", type=float, default=0.1, help="Validation check interval")
-    parser.add_argument("--save-top-k", type=int, default=1, help="Save top k checkpoints")
-    parser.add_argument("--monitor-metric", type=str, default="val_loss", help="Metric to monitor")
-    parser.add_argument("--enable-model-summary", action="store_true", help="Enable model summary")
-    parser.add_argument("--detect-anomaly", action="store_true", help="Detect anomalies")
-    parser.add_argument("--deterministic", action="store_true", help="Deterministic training")
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=None,
+                       help="Gradient accumulation steps (default: 1)")
+    parser.add_argument("--learning-rate", type=float, default=None, help="Learning rate (default: 3e-4)")
+    parser.add_argument("--max-epochs", type=int, default=None, help="Maximum number of epochs (default: 1)")
+    parser.add_argument("--max-steps", type=int, default=None, help="Maximum number of steps (overrides epochs)")
+    parser.add_argument("--sequence-length", type=int, default=None, help="Sequence length (default: 2048)")
+
+    # Logging and checkpointing -------------------------------------------------
+    parser.add_argument("--project-name", type=str, default=None, help="WandB project name (default: muon-8bit)")
+    parser.add_argument("--experiment-name", type=str, default=None, help="Experiment name for logging")
+    parser.add_argument("--save-dir", type=str, default=None, help="Directory to save outputs (default: ./outputs)")
+    parser.add_argument("--log-model", action="store_true", default=None, help="Log model")
+    parser.add_argument("--log-every-n-steps", type=int, default=None, help="Log every n steps (default: 50)")
+    parser.add_argument("--val-check-interval", type=float, default=None,
+                       help="Validation check interval (default: 0.1)")
+    parser.add_argument("--save-top-k", type=int, default=None, help="Save top k checkpoints (default: 1)")
+    parser.add_argument("--monitor-metric", type=str, default=None, help="Metric to monitor (default: val_loss)")
+
+    # Hardware configuration ----------------------------------------------------
+    parser.add_argument("--devices", type=str, default=None, help="Devices to use (default: auto)")
+    parser.add_argument("--num-nodes", type=int, default=None, help="Number of nodes (default: 1)")
+    parser.add_argument("--strategy", type=str, default=None, choices=["fsdp", "ddp", "auto"],
+                       help="Distributed strategy (default: auto)")
+    parser.add_argument("--precision", type=str, default=None, help="Training precision (default: bf16-mixed)")
+
+    # Profiling and debugging ---------------------------------------------------
+    parser.add_argument("--enable-profiling", action="store_true", default=None, help="Enable PyTorch profiling")
+    parser.add_argument("--enable-model-summary", action="store_true", default=None, help="Enable model summary")
+    parser.add_argument("--detect-anomaly", action="store_true", default=None, help="Detect anomalies")
+
+    # Reproducibility -----------------------------------------------------------
+    parser.add_argument("--seed", type=int, default=None, help="Random seed (default: 42)")
+    parser.add_argument("--deterministic", action="store_true", default=None, help="Deterministic training")
+
+    return parser
 
 
+_CLI_ARG_TO_CONFIG_FIELD = {
+    "model_type": "model_type",
+    "optimizer": "optimizer",
+    "transformer_type": "transformer_type",
+    "use_post_sdpa_gate": "use_post_sdpa_gate",
+    "gate_activation_type": "gate_activation_type",
+    "batch_size": "batch_size",
+    "max_train_size": "max_train_size",
+    "max_val_size": "max_val_size",
+    "gradient_accumulation_steps": "gradient_accumulation_steps",
+    "learning_rate": "learning_rate",
+    "max_epochs": "max_epochs",
+    "max_steps": "max_steps",
+    "sequence_length": "sequence_length",
+    "project_name": "project_name",
+    "experiment_name": "experiment_name",
+    "save_dir": "save_dir",
+    "log_model": "log_model",
+    "log_every_n_steps": "log_every_n_steps",
+    "val_check_interval": "val_check_interval",
+    "save_top_k": "save_top_k",
+    "monitor_metric": "monitor_metric",
+    "devices": "devices",
+    "num_nodes": "num_nodes",
+    "strategy": "strategy",
+    "precision": "precision",
+    "enable_profiling": "enable_profiling",
+    "enable_model_summary": "enable_model_summary",
+    "detect_anomaly": "detect_anomaly",
+    "seed": "seed",
+    "deterministic": "deterministic",
+}
+
+
+def _get_explicit_cli_overrides(args: argparse.Namespace) -> dict:
+    """Return only the CLI arguments that the user explicitly provided.
+
+    Since every argument has ``default=None``, any non-None value was
+    explicitly passed on the command line.
+    """
+    overrides = {}
+    for cli_name, config_field in _CLI_ARG_TO_CONFIG_FIELD.items():
+        value = getattr(args, cli_name, None)
+        if value is not None:
+            overrides[config_field] = value
+    return overrides
+
+
+def main():
+    parser = _build_parser()
     args = parser.parse_args()
+
+    cli_overrides = _get_explicit_cli_overrides(args)
+
+    if args.config is not None:
+        logger.info(f"Loading configuration from YAML file: {args.config}")
+        config = TrainingConfig.from_yaml_with_overrides(args.config, cli_overrides)
+    elif cli_overrides:
+        config = TrainingConfig(**cli_overrides)
+    else:
+        config = TrainingConfig()
 
     accelerator_name = torch.cuda.get_device_name(0)
     accelerator_name = accelerator_name.replace(" ", "_")
     accelerator_count = torch.cuda.device_count()
 
-    if args.experiment_name is None:
-        args.experiment_name = f"{args.model_type}-{args.optimizer}-{accelerator_name}-{accelerator_count}"
-    
-    config = TrainingConfig(
-        model_type=args.model_type,
-        optimizer=args.optimizer,
-        transformer_type=args.transformer_type,
-        use_post_sdpa_gate=args.use_post_sdpa_gate,
-        gate_activation_type=args.gate_activation_type,
-        batch_size=args.batch_size,
-        gradient_accumulation_steps=args.gradient_accumulation_steps,
-        learning_rate=args.learning_rate,
-        max_epochs=args.max_epochs,
-        max_steps=args.max_steps,
-        max_train_size=args.max_train_size,
-        max_val_size=args.max_val_size,
-        sequence_length=args.sequence_length,
-        project_name=args.project_name,
-        experiment_name=args.experiment_name,
-        save_dir=args.save_dir,
-        log_model=args.log_model,
-        log_every_n_steps=args.log_every_n_steps,
-        val_check_interval=args.val_check_interval,
-        save_top_k=args.save_top_k,
-        monitor_metric=args.monitor_metric,
-        enable_model_summary=args.enable_model_summary,
-        detect_anomaly=args.detect_anomaly,
-        deterministic=args.deterministic,
-        devices=args.devices,
-        num_nodes=args.num_nodes,
-        strategy=args.strategy,
-        precision=args.precision,
-        enable_profiling=args.enable_profiling,
-        seed=args.seed,
-    )
+    if config.experiment_name is None:
+        config.experiment_name = f"{config.model_type}-{config.optimizer}-{accelerator_name}-{accelerator_count}"
     
     logger.info(f"Starting training with configuration: {config}")
     
     L.seed_everything(config.seed, workers=True)
     
-    data_module = OpenWebTextDataModule(
+    data_module = FineWebDataModule(
         sequence_length=config.sequence_length,
         batch_size=config.batch_size,
         num_proc=config.data_preprocessing_num_proc,
