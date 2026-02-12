@@ -3,134 +3,8 @@ from typing import Any, Dict, Optional, Union
 from pathlib import Path
 from core.optimizers.optimizer_utils import OptimizerName
 from core.modules.feed_forward import ActivationType
+from core.models.model_recipes import ModelRecipe
 
-
-@dataclass
-class ModelTypeConfig:
-    """Pre-defined model size configurations"""
-    n_layers: int
-    d_model: int
-    n_heads: int
-    ff_type: str
-    activation_type: str
-    use_rope: bool
-    ln_type: str
-    ff_hidden_size: Optional[int] = None
-    ff_ratio: Optional[int] = None
-    n_kv_heads: Optional[int] = None
-
-    def __post_init__(self):
-        if self.n_kv_heads is not None:
-            if self.n_kv_heads > self.n_heads:
-                raise ValueError(f"n_kv_heads ({self.n_kv_heads}) must be less than or equal to n_heads ({self.n_heads})")
-            if self.n_kv_heads % self.n_heads != 0:
-                raise ValueError(f"n_kv_heads ({self.n_kv_heads}) must be divisible by n_heads ({self.n_heads})")
-            
-        if self.d_model % self.n_heads != 0:
-            raise ValueError(f"d_model ({self.d_model}) must be divisible by n_heads ({self.n_heads})")
-
-
-MODEL_TYPES = {
-    "gpt-tiny": ModelTypeConfig(
-        n_layers=10,
-        d_model=576,
-        n_heads=12,
-        ln_type="default",
-        ff_ratio=4, 
-        ff_type="mlp",
-        activation_type="gelu",
-        use_rope=True,
-        n_kv_heads=None
-    ),
-    "gpt-small": ModelTypeConfig(
-        n_layers=12,
-        d_model=768,
-        n_heads=12,
-        ln_type="default",
-        ff_ratio=4, 
-        ff_type="mlp",
-        activation_type="gelu",
-        use_rope=True,
-        n_kv_heads=None
-    ),
-    "gpt-medium": ModelTypeConfig(
-        n_layers=24,
-        d_model=1024,
-        n_heads=16,
-        ln_type="default",
-        ff_ratio=4,
-        ff_type="mlp",
-        activation_type="gelu",
-        use_rope=True,
-        n_kv_heads=None
-    ),
-    "gpt-large": ModelTypeConfig(
-        n_layers=24,
-        d_model=1536,
-        n_heads=16,
-        ln_type="default",
-        ff_ratio=4,
-        ff_type="mlp",
-        activation_type="gelu",
-        use_rope=True,
-        n_kv_heads=None
-    ),
-    "gpt-xl": ModelTypeConfig(
-        n_layers=48,
-        d_model=1600,
-        n_heads=25,
-        ln_type="default",
-        ff_ratio=4,
-        ff_type="mlp",
-        activation_type="gelu",
-        use_rope=True,
-        n_kv_heads=None
-    ),
-    "gpt-2.7b": ModelTypeConfig(
-        n_layers=32,
-        d_model=2560,
-        n_heads=32,
-        ln_type="default",
-        ff_ratio=4,
-        ff_type="mlp",
-        activation_type="gelu",
-        use_rope=True,
-        n_kv_heads=None
-    ),
-    "llama-small": ModelTypeConfig(
-        n_layers=12,
-        d_model=768,
-        n_heads=12,
-        ln_type="rms",
-        ff_hidden_size=2304,
-        ff_type="glu",
-        activation_type="silu",
-        use_rope=True,
-        n_kv_heads=None,
-    ),
-    "llama-medium": ModelTypeConfig(
-        n_layers=24,
-        d_model=1024,
-        n_heads=16,
-        ln_type="rms",
-        ff_hidden_size=2816,
-        ff_type="glu",
-        activation_type="silu",
-        use_rope=True,
-        n_kv_heads=None,
-    ),
-    "llama-large": ModelTypeConfig(
-        n_layers=36,
-        d_model=1280,
-        n_heads=20,
-        ln_type="rms",
-        ff_hidden_size=3072,
-        ff_type="glu",
-        activation_type="silu",
-        use_rope=True,
-        n_kv_heads=None,
-    ),
-}
 
 @dataclass
 class TrainingConfig:
@@ -179,6 +53,7 @@ class TrainingConfig:
     val_check_interval: Union[int, float] = 0.1
     save_top_k: int = 1
     monitor_metric: str = "val_loss"
+    log_model: bool = False
     
     # Profiling and debugging
     enable_profiling: bool = False
@@ -190,8 +65,9 @@ class TrainingConfig:
     deterministic: bool = False
 
     def __post_init__(self):
-        if self.model_type not in MODEL_TYPES:
-            raise ValueError(f"Unknown model type: {self.model_type}. Available: {list(MODEL_TYPES.keys())}")
+        available_recipes = ModelRecipe.get_available_recipes()
+        if self.model_type not in available_recipes:
+            raise ValueError(f"Unknown model type: {self.model_type}. Available: {available_recipes}")
         
         if self.optimizer not in [opt.value for opt in OptimizerName]:
             raise ValueError(f"Unknown optimizer: {self.optimizer}. Available: {[opt.value for opt in OptimizerName]}")

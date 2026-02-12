@@ -18,11 +18,11 @@ from torch.utils.data import DataLoader, Dataset
 from transformers import AutoTokenizer
 import wandb
 
-from core.model import CoreConfig, CoreType
-from core.config import AttentionConfig, FeedForwardConfig, LayerNormConfig, FeedForwardType
+from core.models.model_config import CoreConfig
 from core.training.lightning_model import CoreLightningModel
 from core.optimizers.optimizer_utils import OptimizerName
-from core.training.training_config import TrainingConfig, MODEL_TYPES
+from core.training.training_config import TrainingConfig
+from core.models.model_recipes import ModelRecipe
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -147,39 +147,15 @@ class OpenWebTextDataModule(L.LightningDataModule):
         )
 
 def create_model_config(training_config: TrainingConfig, vocab_size: int) -> CoreConfig:
-    """Create model configuration from training config"""
-    model_type = MODEL_TYPES[training_config.model_type]
-
-    feed_forward_config = FeedForwardConfig(
-        feed_forward_type=model_type.ff_type,
-        ff_ratio=model_type.ff_ratio,
-        activation_type=model_type.activation_type,
-        dropout=training_config.dropout,
-    ) if model_type.ff_ratio is not None else FeedForwardConfig(
-        feed_forward_type=model_type.ff_type,
-        ff_hidden_size=model_type.ff_hidden_size,
-        activation_type=model_type.activation_type,
-        dropout=training_config.dropout,
-    )
-    
-    return CoreConfig(
-        transformer_type=CoreType(training_config.transformer_type),
-        n_layers=model_type.n_layers,
-        d_model=model_type.d_model,
-        attention=AttentionConfig(
-            n_heads=model_type.n_heads,
-            n_kv_heads=model_type.n_kv_heads,
-            dropout=training_config.dropout,
-            use_rope=model_type.use_rope,
-            use_post_sdpa_gate=training_config.use_post_sdpa_gate,
-            gate_activation_type=training_config.gate_activation_type,
-        ),
-        feed_forward=feed_forward_config,
-        layer_norm=LayerNormConfig(layer_norm_type=model_type.ln_type, eps=1e-5),
+    """Create model configuration from training config using the model recipe registry."""
+    recipe = ModelRecipe.get_recipe(training_config.model_type)
+    return recipe.build_config(
         vocab_size=vocab_size,
-        dropout=training_config.dropout,
         max_sequence_length=training_config.sequence_length,
-        pad_token_id=50256,
+        dropout=training_config.dropout,
+        transformer_type=training_config.transformer_type,
+        use_post_sdpa_gate=training_config.use_post_sdpa_gate,
+        gate_activation_type=training_config.gate_activation_type,
     )
 
 
@@ -187,7 +163,7 @@ def setup_callbacks(config: TrainingConfig) -> List:
     """Setup training callbacks"""
     callbacks = []
     
-    if not config.enable_profiling:
+    if not config.enable_profiling and config.log_model:
         checkpoint_callback = ModelCheckpoint(
             dirpath=config.save_dir / "checkpoints",
             filename="best-{epoch:02d}-{val_loss:.4f}",
@@ -207,22 +183,20 @@ def setup_callbacks(config: TrainingConfig) -> List:
 
 def setup_logger(
     config: TrainingConfig, 
+    model_config: CoreConfig,
     num_devices: Optional[int] = None, 
     num_iterations: Optional[int] = None
 ) -> WandbLogger:
     """Setup WandB logger with comprehensive config"""
-    model_size = MODEL_TYPES[config.model_type]
-    
     run_name = config.experiment_name or f"{config.model_type}-{config.optimizer}-{config.transformer_type}"
     
     wandb_config = {
         # Model config
         "model_type": config.model_type,
         "transformer_type": config.transformer_type,
-        "n_layers": model_size.n_layers,
-        "d_model": model_size.d_model,
-        "n_heads": model_size.n_heads,
-        "ff_ratio": model_size.ff_ratio,
+        "n_layers": model_config.n_layers,
+        "d_model": model_config.d_model,
+        "n_heads": model_config.attention.n_heads,
         "sequence_length": config.sequence_length,
         "dropout": config.dropout,
         
@@ -350,7 +324,7 @@ def setup_strategy(config: TrainingConfig):
 
 def main():
     parser = argparse.ArgumentParser(description="Distributed training script for GPT-style models")
-    parser.add_argument("--model-type", type=str, default="gpt-small", choices=list(MODEL_TYPES.keys()),
+    parser.add_argument("--model-type", type=str, default="gpt-small", choices=ModelRecipe.get_available_recipes(),
                        help="Model type configuration")
     parser.add_argument("--optimizer", type=str, default="muon", choices=[opt.value for opt in OptimizerName],
                        help="Optimizer to use")
@@ -376,7 +350,16 @@ def main():
     parser.add_argument("--precision", type=str, default="bf16-mixed", help="Training precision")
     parser.add_argument("--enable-profiling", action="store_true", help="Enable PyTorch profiling")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    
+    parser.add_argument("--log-model", action="store_true", help="Log model")
+    parser.add_argument("--log-every-n-steps", type=int, default=50, help="Log every n steps")
+    parser.add_argument("--val-check-interval", type=float, default=0.1, help="Validation check interval")
+    parser.add_argument("--save-top-k", type=int, default=1, help="Save top k checkpoints")
+    parser.add_argument("--monitor-metric", type=str, default="val_loss", help="Metric to monitor")
+    parser.add_argument("--enable-model-summary", action="store_true", help="Enable model summary")
+    parser.add_argument("--detect-anomaly", action="store_true", help="Detect anomalies")
+    parser.add_argument("--deterministic", action="store_true", help="Deterministic training")
+
+
     args = parser.parse_args()
 
     accelerator_name = torch.cuda.get_device_name(0)
@@ -403,6 +386,14 @@ def main():
         project_name=args.project_name,
         experiment_name=args.experiment_name,
         save_dir=args.save_dir,
+        log_model=args.log_model,
+        log_every_n_steps=args.log_every_n_steps,
+        val_check_interval=args.val_check_interval,
+        save_top_k=args.save_top_k,
+        monitor_metric=args.monitor_metric,
+        enable_model_summary=args.enable_model_summary,
+        detect_anomaly=args.detect_anomaly,
+        deterministic=args.deterministic,
         devices=args.devices,
         num_nodes=args.num_nodes,
         strategy=args.strategy,
@@ -461,7 +452,7 @@ def main():
     logger.info(f"Trainable parameters: {trainable_params:,}")
     
     callbacks = setup_callbacks(config)
-    wandb_logger = setup_logger(config, num_devices=num_devices, num_iterations=num_iterations)
+    wandb_logger = setup_logger(config, model_config=model_config, num_devices=num_devices, num_iterations=num_iterations)
     strategy = setup_strategy(config)
     
     profiler = None
@@ -496,11 +487,6 @@ def main():
         logger.info("Starting training...")
         trainer.fit(model, data_module)
         logger.info("Training completed successfully!")
-        
-        if not config.enable_profiling:
-            final_model_path = config.save_dir / "final_model.pt"
-            torch.save(model.model.state_dict(), final_model_path)
-            logger.info(f"Final model saved to {final_model_path}")
         
         if wandb.run:
             wandb.log({

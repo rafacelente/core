@@ -3,7 +3,9 @@ import torch
 import math
 
 from core.config import AttentionConfig, FeedForwardConfig, LayerNormConfig, DType
-from core.model import CoreConfig, NormalizedCoreModel, CoreModel, CoreOutput
+from core.models.model_config import CoreConfig
+from core.models.model import CoreModel, NormalizedCoreModel
+from core.models.model_utils import CoreOutput
 from core.modules.attention import AttentionType
 from core.modules.feed_forward import FeedForwardType, ActivationType
 from core.modules.init import InitMethod

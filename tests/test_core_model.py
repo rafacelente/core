@@ -2,7 +2,9 @@ import pytest
 import torch
 
 from core.config import AttentionConfig, FeedForwardConfig, LayerNormConfig
-from core.model import CoreConfig, CoreModel, CoreOutput
+from core.models.model_config import CoreConfig
+from core.models.model import CoreModel
+from core.models.model_utils import CoreOutput
 
 
 @pytest.fixture(scope="module")

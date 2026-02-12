@@ -5,7 +5,7 @@ import torch
 
 from core.optimizers.optimizer_utils import get_optimizer
 from core.optimizers.lr_scheduler_utils import LR_SCHEDULER_FUNCTION_MAPPING
-from core.model import CoreConfig
+from core.models.model_config import CoreConfig
 from core.training.training_config import TrainingConfig
 
 
