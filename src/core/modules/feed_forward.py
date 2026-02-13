@@ -6,8 +6,9 @@ import math
 
 import torch
 import torch.nn as nn
+from pydantic import BaseModel, ConfigDict
 
-from core.utils import BufferCache
+from core.utils import BufferCache, DType
 
 
 class ActivationType(str, Enum):
@@ -167,3 +168,39 @@ class FeedForward(nn.Module):
             return cast(FeedForward, NormalizedGLU(d_model, hidden_size, activation_type, dtype))
         else:
             raise ValueError(f"Invalid feed forward type: {type}")
+
+class FeedForwardConfig(BaseModel):
+    """
+    Configuration for the feed forward network.
+
+    Default values are based on the GPT-2 MLP.
+
+    Args:
+        ff_ratio: The ratio of the hidden size to the feed forward network.
+        ff_hidden_size: The hidden size of the feed forward network.
+        activation_type: The activation function of the feed forward network.
+        feed_forward_type: The type of the feed forward network.
+    """
+
+    ff_ratio: float = 4.0
+    ff_hidden_size: Optional[int] = None
+    activation_type: ActivationType = ActivationType.GELU
+    feed_forward_type: FeedForwardType = FeedForwardType.MLP
+    dtype: DType = DType.FLOAT32
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    def build(self, d_model: int, cache: Optional[BufferCache] = None) -> "FeedForward":
+        # TODO: cache for MoE when implemented
+        if self.ff_hidden_size is None:
+            ff_hidden_size = int(d_model * self.ff_ratio)
+        else:
+            ff_hidden_size = self.ff_hidden_size
+        return FeedForward.build(
+            type=self.feed_forward_type,
+            d_model=d_model,
+            hidden_size=ff_hidden_size,
+            activation_type=self.activation_type,
+            dtype=self.dtype.to_torch_dtype(),
+            cache=cache,
+        )

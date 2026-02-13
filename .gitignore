@@ -1,6 +1,7 @@
 lightning_logs/
 wandb_logs/
 trace.json
+outputs/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

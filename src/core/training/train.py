@@ -21,15 +21,17 @@ from core.optimizers.optimizer_utils import OptimizerName
 from core.training.training_config import TrainingConfig
 from core.models.model_recipes import ModelRecipe
 from core.training.data.fineweb import FineWebDataModule
+from core.training.callbacks.profiler_callback import ThroughputMeasureCallback
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 
 def create_model_config(training_config: TrainingConfig, vocab_size: int) -> CoreConfig:
-    """Create model configuration from training config using the model recipe registry."""
+    """Create model configuration from training config using the model recipe registry.
+    """
     recipe = ModelRecipe.get_recipe(training_config.model_type)
-    return recipe.build_config(
+    config = recipe.build_config(
         vocab_size=vocab_size,
         max_sequence_length=training_config.sequence_length,
         dropout=training_config.dropout,
@@ -37,13 +39,23 @@ def create_model_config(training_config: TrainingConfig, vocab_size: int) -> Cor
         use_post_sdpa_gate=training_config.use_post_sdpa_gate,
         gate_activation_type=training_config.gate_activation_type,
     )
+    optimizations = training_config.kernel_optimizations
+    if optimizations.any_enabled():
+        config = config.with_kernel_optimizations(optimizations)
+        logger.info(f"Applied kernel optimizations: {optimizations}")
+    if config.vocab_size != vocab_size:
+        logger.info(
+            f"Vocab size padded from {vocab_size} to {config.vocab_size} "
+            f"(required by fused cross-entropy kernel)"
+        )
+    return config
 
 
-def setup_callbacks(config: TrainingConfig) -> List:
+def setup_callbacks(config: TrainingConfig, num_devices: Optional[int] = None) -> List:
     """Setup training callbacks"""
     callbacks = []
     
-    if not config.enable_profiling and config.log_model:
+    if not (config.enable_profiling or config.enable_throughput_measurement) and config.log_model:
         checkpoint_callback = ModelCheckpoint(
             dirpath=config.save_dir / "checkpoints",
             filename="best-{epoch:02d}-{val_loss:.4f}",
@@ -55,6 +67,16 @@ def setup_callbacks(config: TrainingConfig) -> List:
         )
         callbacks.append(checkpoint_callback)
     
+    if config.enable_throughput_measurement:
+        assert num_devices is not None, "Number of devices must be provided to measure throughput"
+        throughput_callback = ThroughputMeasureCallback(
+            num_gpus=num_devices,
+            batch_size=config.batch_size,
+            grad_accumulation_steps=config.gradient_accumulation_steps,
+            seq_len=config.sequence_length,
+        )
+        callbacks.append(throughput_callback)
+    
     lr_monitor = LearningRateMonitor(logging_interval="step")
     callbacks.append(lr_monitor)
     
@@ -64,8 +86,9 @@ def setup_callbacks(config: TrainingConfig) -> List:
 def setup_logger(
     config: TrainingConfig, 
     model_config: CoreConfig,
+    tokenizer_vocab_size: int,
     num_devices: Optional[int] = None, 
-    num_iterations: Optional[int] = None
+    num_iterations: Optional[int] = None,
 ) -> WandbLogger:
     """Setup WandB logger with comprehensive config"""
     run_name = config.experiment_name or f"{config.model_type}-{config.optimizer}-{config.transformer_type}"
@@ -77,6 +100,8 @@ def setup_logger(
         "n_layers": model_config.n_layers,
         "d_model": model_config.d_model,
         "n_heads": model_config.attention.n_heads,
+        "vocab_size": model_config.vocab_size,
+        "tokenizer_vocab_size": tokenizer_vocab_size,
         "sequence_length": config.sequence_length,
         "dropout": config.dropout,
         
@@ -193,7 +218,6 @@ def setup_strategy(config: TrainingConfig):
             sharding_strategy="FULL_SHARD",
             activation_checkpointing=None,
             cpu_offload=False,
-            mixed_precision=config.precision,
         )
     elif config.strategy == "ddp":
         from lightning.pytorch.strategies import DDPStrategy
@@ -237,6 +261,14 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-steps", type=int, default=None, help="Maximum number of steps (overrides epochs)")
     parser.add_argument("--sequence-length", type=int, default=None, help="Sequence length (default: 2048)")
 
+    # Kernel optimizations ------------------------------------------------------
+    parser.add_argument("--fused-rope", action="store_true", default=None,
+                       help="Use fused Triton RoPE kernel")
+    parser.add_argument("--fused-cross-entropy", action="store_true", default=None,
+                       help="Use fused cross-entropy loss kernel")
+    parser.add_argument("--fused-rms-norm", action="store_true", default=None,
+                       help="Use fused RMSNorm kernel (requires SM100+)")
+
     # Logging and checkpointing -------------------------------------------------
     parser.add_argument("--project-name", type=str, default=None, help="WandB project name (default: muon-8bit)")
     parser.add_argument("--experiment-name", type=str, default=None, help="Experiment name for logging")
@@ -259,6 +291,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--enable-profiling", action="store_true", default=None, help="Enable PyTorch profiling")
     parser.add_argument("--enable-model-summary", action="store_true", default=None, help="Enable model summary")
     parser.add_argument("--detect-anomaly", action="store_true", default=None, help="Detect anomalies")
+    parser.add_argument("--enable-throughput-measurement", action="store_true", default=None, help="Enable throughput measurement")
 
     # Reproducibility -----------------------------------------------------------
     parser.add_argument("--seed", type=int, default=None, help="Random seed (default: 42)")
@@ -296,6 +329,10 @@ _CLI_ARG_TO_CONFIG_FIELD = {
     "enable_profiling": "enable_profiling",
     "enable_model_summary": "enable_model_summary",
     "detect_anomaly": "detect_anomaly",
+    "enable_throughput_measurement": "enable_throughput_measurement",
+    "fused_rope": "fused_rope",
+    "fused_cross_entropy": "fused_cross_entropy",
+    "fused_rms_norm": "fused_rms_norm",
     "seed": "seed",
     "deterministic": "deterministic",
 }
@@ -385,14 +422,20 @@ def main():
     logger.info(f"Total parameters: {total_params:,}")
     logger.info(f"Trainable parameters: {trainable_params:,}")
     
-    callbacks = setup_callbacks(config)
-    wandb_logger = setup_logger(config, model_config=model_config, num_devices=num_devices, num_iterations=num_iterations)
+    callbacks = setup_callbacks(config, num_devices=num_devices)
+    wandb_logger = setup_logger(
+        config,
+        model_config=model_config,
+        tokenizer_vocab_size=vocab_size,
+        num_devices=num_devices,
+        num_iterations=num_iterations,
+    )
     strategy = setup_strategy(config)
     
     profiler = None
     if config.enable_profiling:
         profiler = PyTorchProfiler(
-            schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=1),
+            schedule=torch.profiler.schedule(wait=10, warmup=5, active=3, repeat=1),
             on_trace_ready=torch.profiler.tensorboard_trace_handler(str(config.save_dir / "profiler")),
             record_shapes=True,
             profile_memory=True,

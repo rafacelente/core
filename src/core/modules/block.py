@@ -4,7 +4,9 @@ import math
 import torch
 import torch.nn as nn
 
-from core.config import AttentionConfig, FeedForwardConfig, LayerNormConfig
+from core.modules.attention import AttentionConfig
+from core.modules.feed_forward import FeedForwardConfig
+from core.modules.layer_norm import LayerNormConfig
 from core.utils import BufferCache
 
 

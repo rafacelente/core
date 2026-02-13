@@ -33,6 +33,7 @@ class ThroughputMeasureCallback(Callback):
         seq_len: int,
         log_dict: Optional[Dict[str, Any]] = None,
         starting_step: int = 30,
+        ending_step: int = 100,
     ):
         self._initialized = False
         assert batch_size is not None, "Batch size must be provided to measure throughput"
@@ -46,6 +47,7 @@ class ThroughputMeasureCallback(Callback):
         self.step_count = 0
         self.starting_step = starting_step
         self.measure_started = False
+        self.ending_step = ending_step
 
     @rank_zero_only
     def setup(self, trainer: L.Trainer, pl_module: L.LightningModule, stage=None):
@@ -54,8 +56,7 @@ class ThroughputMeasureCallback(Callback):
         logging.warning("Profiling callback initialized")
         self._initialized = True
 
-    @rank_zero_only
-    def on_train_end(self, trainer: L.Trainer, pl_module: L.LightningModule):
+    def _end_measurement(self):
         self.ender.record()  # type: ignore
         torch.cuda.synchronize()
         counted_steps = self.step_count - self.starting_step
@@ -89,6 +90,11 @@ class ThroughputMeasureCallback(Callback):
         except Exception as e:
             logging.warning(f"Failed to log performance metrics to wandb: {e}")
 
+    @rank_zero_only
+    def on_train_epoch_end(self, trainer: L.Trainer, pl_module: L.LightningModule):
+        if self.measure_started:
+            self._end_measurement()
+
 
     @rank_zero_only
     def on_train_batch_end(self, trainer: L.Trainer, pl_module: L.LightningModule, outputs, batch, batch_idx):
@@ -97,4 +103,7 @@ class ThroughputMeasureCallback(Callback):
         if self.starting_step >= self.step_count and not self.measure_started:
             self.starter.record()  # type: ignore
             self.measure_started = True
+        if self.ending_step <= self.step_count and self.measure_started:
+            self._end_measurement()
+            self.measure_started = False
         self.step_count += 1

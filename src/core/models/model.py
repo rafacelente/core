@@ -4,11 +4,13 @@ import math
 import torch
 import torch.nn as nn
 
-from core.config import AttentionConfig, DType, FeedForwardConfig, LayerNormConfig
-from core.modules.attention import NormalizedAttention, Attention
+from core.modules.attention import NormalizedAttention, Attention, AttentionConfig
 from core.modules.block import NormalizedBlock, Block
 from core.modules.init import InitMethod
-from core.utils import BufferCache, get_default_device
+from core.modules.loss import LossConfig
+from core.modules.feed_forward import FeedForwardConfig
+from core.modules.layer_norm import LayerNormConfig
+from core.utils import BufferCache, get_default_device, DType
 from core.models.model_utils import CoreOutput
 
 
@@ -21,12 +23,12 @@ class CoreModel(nn.Module):
         attention_config: AttentionConfig,
         feed_forward_config: FeedForwardConfig,
         layer_norm_config: LayerNormConfig,
+        loss_config: LossConfig,
+        output_norm_config: Optional[LayerNormConfig] = None,
         dropout: float = 0.0,
         dtype: DType = DType.FLOAT32,
         init_method: InitMethod = InitMethod.NORMAL,
         init_seed: int = 42,
-        loss_fn: Optional[nn.Module] = None,
-        ignore_index: int = -100,
     ):
         super().__init__()
 
@@ -37,10 +39,11 @@ class CoreModel(nn.Module):
         self.attention_config = attention_config
         self.feed_forward_config = feed_forward_config
         self.layer_norm_config = layer_norm_config
+        self.output_norm_config = output_norm_config
         self.dropout = dropout
         self.dtype = dtype
-        self.ignore_index = ignore_index
-        self.loss_fn = loss_fn or nn.CrossEntropyLoss(ignore_index=ignore_index)
+        self.loss_config = loss_config
+
         self.embeddings = nn.Embedding(vocab_size, d_model, dtype=dtype.to_torch_dtype())
         self.blocks = nn.ModuleDict()
         for block_idx in range(n_layers):
@@ -54,9 +57,15 @@ class CoreModel(nn.Module):
             )
             self.blocks[str(block_idx)] = block
         self.lm_head = nn.Linear(d_model, vocab_size, dtype=dtype.to_torch_dtype(), bias=False)
+        if self.output_norm_config is not None:
+            self.output_norm = self.output_norm_config.build(hidden_size=d_model)
+        else:
+            self.output_norm = None
 
         self.init_method = InitMethod(init_method)
         self.init_seed = torch.Generator().manual_seed(init_seed)
+
+        self.loss_fn = loss_config.build()
 
         self._cache = cache
         self._device: Optional[torch.device] = None
@@ -113,8 +122,13 @@ class CoreModel(nn.Module):
         **kwargs,
     ) -> CoreOutput:
         x = self.embeddings(input_ids)
+
         for block in self.blocks.values():
             x = block(x)
+
+        if self.output_norm is not None:
+            x = self.output_norm(x)
+
         logits = self.lm_head(x)
         if labels is not None:
             labels = labels.to(logits.device)
@@ -133,14 +147,14 @@ class NormalizedCoreModel(CoreModel):
         attention_config: AttentionConfig,
         feed_forward_config: FeedForwardConfig,
         layer_norm_config: LayerNormConfig,
+        loss_config: LossConfig,
+        output_norm_config: Optional[LayerNormConfig] = None,
         dropout: float = 0.0,
         dtype: DType = DType.FLOAT32,
         init_method: InitMethod = InitMethod.NORMALIZED,
         init_seed: int = 42,
-        loss_fn: Optional[nn.Module] = None,
-        ignore_index: int = -100,
     ):
-        super().__init__(d_model, n_layers, vocab_size, attention_config, feed_forward_config, layer_norm_config, dropout, dtype, init_method, init_seed, loss_fn, ignore_index)
+        super().__init__(d_model, n_layers, vocab_size, attention_config, feed_forward_config, layer_norm_config, loss_config, dropout, dtype, init_method, init_seed)
         if self.dropout > 0.0:
             raise ValueError("NormalizedCoreModel does not support dropout")
         del self.blocks
@@ -211,8 +225,13 @@ class NormalizedCoreModel(CoreModel):
         **kwargs,
     ) -> CoreOutput:
         x = self.embeddings(input_ids)
+
         for block in self.blocks.values():
             x = block(x)
+
+        if self.output_norm is not None:
+            x = self.output_norm(x)
+
         logits = self.lm_head(x)
         sz = self.sz * (self.sz_init_value / self.sz_init_scaling)
         logits = sz * logits

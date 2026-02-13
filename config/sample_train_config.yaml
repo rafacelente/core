@@ -1,5 +1,5 @@
 model:
-  model_type: gpt-small            # one of: gpt-tiny, gpt-small, gpt-medium,
+  model_type: llama-small            # one of: gpt-tiny, gpt-small, gpt-medium,
                                     #         gpt-large, gpt-xl, gpt-2.7b,
                                     #         llama-small, llama-medium, llama-large
   transformer_type: base            # "base" or "normalized"
@@ -8,21 +8,26 @@ model:
   gate_activation_type: sigmoid     # "sigmoid", "gelu", or "relu"
 
 training:
-  batch_size: 12
+  batch_size: 32
   gradient_accumulation_steps: 1
-  learning_rate: 3.0e-4
+  learning_rate: 6.0e-4
   weight_decay: 0.1
   dropout: 0.0
   max_grad_norm: 1.0
   max_epochs: 1
   max_steps: -1                     # set > 0 to cap total optimizer steps
 
+optimizations:
+  fused_rope: false         
+  fused_cross_entropy: false
+  fused_rms_norm: false
+
 optimizer:
-  optimizer: muon                   # one of: adam, adamw, muon, sgd
+  optimizer: adamw                   # one of: adam, adamw, muon, sgd
   lr_scheduler: wsd                 # learning-rate scheduler name
   lr_scheduler_kwargs:
-    warmup_frac: 0.1
-    cooldown_frac: 0.1
+    warmup_frac: 0.2
+    cooldown_frac: 0.2
 
 data:
   dataset_name: "HuggingFaceFW/fineweb-edu"
@@ -38,10 +43,10 @@ hardware:
   num_nodes: 1
 
 logging:
-  project_name: muon-8bit
+  project_name: optimizing
   experiment_name: null             # null to auto-generate from model/optimizer/GPU
   save_dir: ./outputs
-  log_every_n_steps: 50
+  log_every_n_steps: 100
   val_check_interval: 0.1
   save_top_k: 1
   monitor_metric: val_loss

@@ -93,6 +93,8 @@ class ModelRecipe(ABC):
 
         Each recipe defines how to assemble a CoreConfig from its
         architectural parameters and the provided runtime parameters.
+        The returned config always uses default (non-fused) implementations;
+        kernel optimizations are applied separately via `.with_kernel_optimizations`.
 
         Args:
             vocab_size: The vocabulary size.

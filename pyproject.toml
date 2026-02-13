@@ -17,6 +17,8 @@ dependencies = [
     "wandb>=0.21.1,<0.22.0",
     "matplotlib>=3.10.5,<4.0.0",
     "anyscale>=0.26.58",
+    "einops>=0.8.2",
+    "quack-kernels>=0.2.4",
 ]
 
 [project.optional-dependencies]

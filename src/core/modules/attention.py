@@ -6,11 +6,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.attention import SDPBackend
+from pydantic import BaseModel, ConfigDict, Field
 
-from core.modules.layer_norm import LayerNorm, LayerNormType
-from core.modules.rope import RoPE, RoPEType
+from core.modules.layer_norm import LayerNorm, LayerNormType, LayerNormConfig
+from core.modules.rope import RoPEType, RoPEConfig
 from core.utils import BufferCache
-
 from core.modules.feed_forward import Activation, ActivationType
 
 class AttentionType(str, Enum):
@@ -23,10 +23,10 @@ class DefaultAttention(nn.Module):
         d_model: int,
         n_heads: int,
         n_kv_heads: Optional[int] = None,
-        use_rope: bool = True,
-        rope_type: RoPEType = RoPEType.DEFAULT,
+        head_dim: Optional[int] = None,
+        rope_config: Optional[RoPEConfig] = None,
         clip_qkv: Optional[float] = None,
-        qk_norm_type: Optional[LayerNormType] = None,
+        qk_norm_config: Optional[LayerNormConfig] = None,
         dropout: float = 0.0,
         cache: Optional[BufferCache] = None,
         use_post_sdpa_gate: bool = False,
@@ -36,21 +36,25 @@ class DefaultAttention(nn.Module):
         self.d_model = d_model
         self.n_heads = n_heads
         self.n_kv_heads = n_kv_heads or n_heads
-        self.use_rope = use_rope
-        self.rope_type = rope_type
+        self.head_dim = head_dim or d_model // n_heads
+        self.use_rope = rope_config is not None
+        self.rope_config = rope_config
         self.clip_qkv = clip_qkv
-        self.qk_norm_type = qk_norm_type
-        self.head_dim = d_model // n_heads
+        self.qk_norm_config = qk_norm_config
         self.dropout_p = dropout
         self.use_post_sdpa_gate = use_post_sdpa_gate
         self.dropout = nn.Dropout(dropout) if dropout > 0.0 else nn.Identity()
-        self.w_q = nn.Linear(d_model, d_model, bias=False)
-        self.w_k = nn.Linear(d_model, d_model, bias=False)
-        self.w_v = nn.Linear(d_model, d_model, bias=False)
-        self.w_o = nn.Linear(d_model, d_model, bias=False)
+
+        query_size = self.n_heads * self.head_dim
+        key_size = self.n_kv_heads * self.head_dim
+        value_size = self.n_kv_heads * self.head_dim
+        self.w_q = nn.Linear(d_model, query_size, bias=False)
+        self.w_k = nn.Linear(d_model, key_size, bias=False)
+        self.w_v = nn.Linear(d_model, value_size, bias=False)
+        self.w_o = nn.Linear(query_size, d_model, bias=False)
 
         if self.use_rope:
-            self.rope = RoPE.build(type=self.rope_type, head_size=self.head_dim, cache=cache)
+            self.rope = self.rope_config.build(head_size=self.head_dim, cache=cache)
         self._setup_qk_norm()
 
         if self.use_post_sdpa_gate:
@@ -60,9 +64,9 @@ class DefaultAttention(nn.Module):
     def _setup_qk_norm(self) -> None:
         self.q_norm: Optional[LayerNorm] = None
         self.k_norm: Optional[LayerNorm] = None
-        if self.qk_norm_type is not None:
-            self.q_norm = LayerNorm.build(type=self.qk_norm_type, hidden_size=self.head_dim)
-            self.k_norm = LayerNorm.build(type=self.qk_norm_type, hidden_size=self.head_dim)
+        if self.qk_norm_config is not None:
+            self.q_norm = self.qk_norm_config.build(hidden_size=self.head_dim)
+            self.k_norm = self.qk_norm_config.build(hidden_size=self.head_dim)
 
     def sdpa(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
         # q: B, T, n_heads, head_dim -> B, n_heads, T, head_dim
@@ -84,22 +88,25 @@ class DefaultAttention(nn.Module):
         q = self.w_q(x)
         k = self.w_k(x)
         v = self.w_v(x)
+
+        q = q.view(bs, seq_len, -1, self.head_dim)
+        k = k.view(bs, seq_len, -1, self.head_dim)
+        v = v.view(bs, seq_len, -1, self.head_dim)
+
         if self.clip_qkv is not None:
             q = torch.clamp(q, -self.clip_qkv, self.clip_qkv)
             k = torch.clamp(k, -self.clip_qkv, self.clip_qkv)
             v = torch.clamp(v, -self.clip_qkv, self.clip_qkv)
+
         if self.q_norm is not None:
             q = self.q_norm(q)
         if self.k_norm is not None:
             k = self.k_norm(k)
 
-        q = q.view(bs, seq_len, -1, self.head_dim)
-        k = k.view(bs, seq_len, -1, self.head_dim)
-        v = v.view(bs, seq_len, -1, self.head_dim)
         if self.use_rope:
-            q, k = self.rope(q, k, pos_sin, pos_cos)
+            q, k = self.rope(q, k, pos_sin, pos_cos, interleaved=False)
+        
         att = self.sdpa(q, k, v)
-
         att = att.view(bs, seq_len, -1)
 
         if self.use_post_sdpa_gate:
@@ -114,16 +121,16 @@ class NormalizedAttention(DefaultAttention):
         d_model: int,
         n_heads: int,
         n_kv_heads: Optional[int] = None,
-        use_rope: bool = True,
-        rope_type: RoPEType = RoPEType.DEFAULT,
+        head_dim: Optional[int] = None,
+        rope_config: Optional[RoPEConfig] = None,
         clip_qkv: Optional[float] = None,
-        qk_norm_type: Optional[LayerNormType] = None,
+        qk_norm_config: Optional[LayerNormConfig] = None,
         dropout: float = 0.0,
         cache: Optional[BufferCache] = None,
         use_post_sdpa_gate: bool = False,
         gate_activation_type: ActivationType = ActivationType.SIGMOID,
     ):
-        super().__init__(d_model, n_heads, n_kv_heads, use_rope, rope_type, clip_qkv, qk_norm_type, dropout, cache)
+        super().__init__(d_model, n_heads, n_kv_heads, head_dim, rope_config, clip_qkv, qk_norm_config, dropout, cache, use_post_sdpa_gate, gate_activation_type)
         self.sq_init_value = 1.0
         self.sk_init_value = 1.0
         self.sq_init_scaling = 1.0 / math.sqrt(d_model)
@@ -179,10 +186,9 @@ class Attention(nn.Module):
         d_model: int,
         n_heads: int,
         n_kv_heads: Optional[int] = None,
-        use_rope: bool = True,
-        rope_type: RoPEType = RoPEType.DEFAULT,
+        rope_config: Optional[RoPEConfig] = None,
         clip_qkv: Optional[float] = None,
-        qk_norm_type: Optional[LayerNormType] = None,
+        qk_norm_config: Optional[LayerNormConfig] = None,
         dropout: float = 0.0,
         cache: Optional[BufferCache] = None,
         use_post_sdpa_gate: bool = False,
@@ -209,3 +215,46 @@ class Attention(nn.Module):
             return cast(Attention, NormalizedAttention(**kwargs))
         else:
             raise ValueError(f"Invalid attention type: {type}")
+
+class AttentionConfig(BaseModel):
+    """
+    Configuration for the attention.
+    """
+
+    type: AttentionType = AttentionType.DEFAULT
+    n_heads: int
+    n_kv_heads: Optional[int] = None
+    head_dim: Optional[int] = None
+    rope: Optional[RoPEConfig] = Field(default_factory=lambda: RoPEConfig())
+    clip_qkv: Optional[float] = None
+    qk_norm: Optional[LayerNormConfig] = None
+    dropout: float = 0.0
+    use_post_sdpa_gate: bool = False
+    gate_activation_type: Optional[ActivationType] = ActivationType.SIGMOID
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    @property
+    def effective_kv_heads(self) -> int:
+        return self.n_kv_heads or self.n_heads
+
+    def build(self, d_model: int, cache: Optional[BufferCache] = None) -> "Attention":
+        if d_model % self.n_heads != 0 and self.head_dim is None:
+            raise ValueError(f"d_model must be divisible by n_heads if head_dim is not provided, got d_model: {d_model}, n_heads: {self.n_heads}")
+        if d_model % self.effective_kv_heads != 0 and self.head_dim is None:
+            raise ValueError(f"d_model must be divisible by effective_kv_heads if head_dim is not provided, got d_model: {d_model}, effective_kv_heads: {self.effective_kv_heads}")
+
+        return Attention.build(
+            type=self.type,
+            d_model=d_model,
+            n_heads=self.n_heads,
+            n_kv_heads=self.n_kv_heads,
+            head_dim=self.head_dim,
+            rope_config=self.rope,
+            clip_qkv=self.clip_qkv,
+            qk_norm_config=self.qk_norm,
+            dropout=self.dropout,
+            cache=cache,
+            use_post_sdpa_gate=self.use_post_sdpa_gate,
+            gate_activation_type=self.gate_activation_type,
+        )

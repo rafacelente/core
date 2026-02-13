@@ -7,6 +7,7 @@ import yaml
 from core.optimizers.optimizer_utils import OptimizerName
 from core.modules.feed_forward import ActivationType
 from core.models.model_recipes import ModelRecipe
+from core.optimizations import KernelOptimizations
 
 
 @dataclass
@@ -21,13 +22,18 @@ class TrainingConfig:
     
     # Training configuration
     batch_size: int = 8
-    gradient_accumulation_steps: int = 4
+    gradient_accumulation_steps: int = 1
     max_epochs: int = 1
     max_steps: int = -1
     learning_rate: float = 3e-4
     weight_decay: float = 0.1
     dropout: float = 0.0
     max_grad_norm: float = 1.0
+    
+    # Kernel optimizations (individually toggleable fused kernels)
+    fused_rope: bool = False
+    fused_cross_entropy: bool = False
+    fused_rms_norm: bool = False
     
     # Optimizer configuration
     optimizer: str = "muon"
@@ -62,6 +68,7 @@ class TrainingConfig:
     enable_profiling: bool = False
     enable_model_summary: bool = True
     detect_anomaly: bool = False
+    enable_throughput_measurement: bool = False
     
     # Reproducibility
     seed: int = 42
@@ -81,6 +88,21 @@ class TrainingConfig:
         self.save_dir = Path(self.save_dir)
         self.save_dir.mkdir(parents=True, exist_ok=True)
 
+    @property
+    def kernel_optimizations(self) -> KernelOptimizations:
+        """Build a :class:`KernelOptimizations` from the individual flags.
+
+        Uses ``dataclasses.fields`` so that new optimizations added to
+        :class:`KernelOptimizations` are picked up automatically as long
+        as a matching field exists on this config.
+        """
+        import dataclasses as dc
+        return KernelOptimizations(**{
+            f.name: getattr(self, f.name)
+            for f in dc.fields(KernelOptimizations)
+            if hasattr(self, f.name)
+        })
+
     @classmethod
     def from_yaml(cls, path: str) -> "TrainingConfig":
         """Load a TrainingConfig from a YAML file.
@@ -93,6 +115,7 @@ class TrainingConfig:
             training:   batch_size, gradient_accumulation_steps, max_epochs,
                         max_steps, learning_rate, weight_decay, dropout,
                         max_grad_norm
+            optimizations: `KernelOptimizations.registered_names()`
             optimizer:  optimizer, optimizer_kwargs, lr_scheduler,
                         lr_scheduler_kwargs
             data:       dataset_name, dataset_config, data_preprocessing_num_proc,
