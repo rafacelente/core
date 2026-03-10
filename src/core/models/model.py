@@ -10,7 +10,7 @@ from core.modules.init import InitMethod
 from core.modules.loss import LossConfig
 from core.modules.feed_forward import FeedForwardConfig
 from core.modules.layer_norm import LayerNormConfig
-from core.utils import BufferCache, get_default_device, DType
+from core.utils import BufferCache, get_default_device, DType, normalize_matrix
 from core.models.model_utils import CoreOutput
 
 
@@ -200,18 +200,12 @@ class NormalizedCoreModel(CoreModel):
 
         self.normalize_matrices()
 
-    def justnorm(self, x: torch.Tensor, dim: int = -1) -> torch.Tensor:
-        return x / x.norm(p=2, dim=dim, keepdim=True, dtype=torch.float32).type_as(x)
-
-    def _normalize_matrix(self, m: torch.Tensor, dim: int = -1) -> torch.Tensor:
-        m.copy_(self.justnorm(m, dim=dim))
-
     @torch.no_grad()
     def normalize_matrices(self) -> None:
         if self.embeddings is not None:
-            self._normalize_matrix(self.embeddings.weight)
+            normalize_matrix(self.embeddings.weight)
         if self.lm_head is not None:
-            self._normalize_matrix(self.lm_head.weight)
+            normalize_matrix(self.lm_head.weight)
 
         for block in self.blocks.values():
             block = cast(NormalizedBlock, block)

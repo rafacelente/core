@@ -7,7 +7,7 @@ import torch.nn as nn
 from core.modules.attention import AttentionConfig
 from core.modules.feed_forward import FeedForwardConfig
 from core.modules.layer_norm import LayerNormConfig
-from core.utils import BufferCache
+from core.utils import BufferCache, justnorm
 
 
 class Block(nn.Module):
@@ -59,21 +59,18 @@ class NormalizedBlock(nn.Module):
         self.ff_alpha_init_scaling = 1.0 / math.sqrt(d_model)
         self.ff_alpha = nn.Parameter(self.ff_alpha_init_scaling * torch.ones(d_model))
 
-    def justnorm(self, x: torch.Tensor, dim: int = -1) -> torch.Tensor:
-        return x / x.norm(p=2, dim=dim, keepdim=True, dtype=torch.float32)
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        h = self.justnorm(
+        h = justnorm(
             torch.lerp(
                 x,
-                self.justnorm(self.attention(x)),
+                justnorm(self.attention(x)),
                 (self.attn_alpha * (self.attn_alpha_init_value / self.attn_alpha_init_scaling)).abs(),
             )
         )
-        return self.justnorm(
+        return justnorm(
             torch.lerp(
                 h,
-                self.justnorm(self.feed_forward(h)),
+                justnorm(self.feed_forward(h)),
                 (self.ff_alpha * (self.ff_alpha_init_value / self.ff_alpha_init_scaling)).abs(),
             )
         )
