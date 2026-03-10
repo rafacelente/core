@@ -2,6 +2,7 @@ from typing import Union
 from enum import Enum
 import torch
 from .muon import Muon, configure_muon
+from .manifold_muon import ManifoldMuon, configure_manifold_muon
 
 
 class OptimizerName(str, Enum):
@@ -9,6 +10,7 @@ class OptimizerName(str, Enum):
 
     ADAM = "adam"
     MUON = "muon"
+    MANIFOLD_MUON = "manifold_muon"
     ADAMW = "adamw"
     SGD = "sgd"
 
@@ -16,6 +18,7 @@ class OptimizerName(str, Enum):
 OPTIMIZER_MAPPING: dict[OptimizerName, type[torch.optim.Optimizer]] = {
     OptimizerName.ADAM: torch.optim.Adam,
     OptimizerName.MUON: Muon,
+    OptimizerName.MANIFOLD_MUON: ManifoldMuon,
     OptimizerName.ADAMW: torch.optim.AdamW,
     OptimizerName.SGD: torch.optim.SGD,
 }
@@ -51,6 +54,9 @@ def get_optimizer(
 
     if name_enum is OptimizerName.MUON:
         return configure_muon(model, lr, **kwargs)
+
+    if name_enum is OptimizerName.MANIFOLD_MUON:
+        return configure_manifold_muon(model, lr, **kwargs)
 
     optimizer_cls = OPTIMIZER_MAPPING[name_enum]
     return optimizer_cls(model.parameters(), lr=lr, **kwargs)  # type: ignore[arg-type]

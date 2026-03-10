@@ -128,6 +128,22 @@ def test_get_optimizer_muon():
     assert isinstance(optimizer, Muon)
 
 
+def test_get_optimizer_manifold_muon():
+    model = _TinyModel()
+    optimizer = get_optimizer("manifold_muon", model, lr=0.02)
+    assert isinstance(optimizer, ManifoldMuon)
+
+
+def test_get_optimizer_manifold_muon_via_enum():
+    model = _TinyModel()
+    optimizer = get_optimizer(OptimizerName.MANIFOLD_MUON, model, lr=0.02)
+    assert isinstance(optimizer, ManifoldMuon)
+
+
+def test_manifold_muon_in_optimizer_name_enum():
+    assert "manifold_muon" in [opt.value for opt in OptimizerName]
+
+
 def test_get_optimizer_invalid_name():
     model = _TinyModel()
     with pytest.raises(ValueError, match="not found"):
