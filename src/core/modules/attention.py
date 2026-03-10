@@ -8,6 +8,8 @@ import torch.nn.functional as F
 from torch.nn.attention import SDPBackend
 from pydantic import BaseModel, ConfigDict, Field
 
+from core.utils import justnorm, normalize_matrix
+
 from core.modules.layer_norm import LayerNorm, LayerNormType, LayerNormConfig
 from core.modules.rope import RoPEType, RoPEConfig
 from core.utils import BufferCache
@@ -166,18 +168,12 @@ class NormalizedAttention(DefaultAttention):
         att = att.view(bs, seq_len, -1)
         return self.w_o(att)
 
-    def justnorm(self, x: torch.Tensor, dim: int = -1) -> torch.Tensor:
-        return x / x.norm(p=2, dim=dim, keepdim=True, dtype=torch.float32).type_as(x)
-
-    def _normalize_matrix(self, m: torch.Tensor, dim: int = -1) -> torch.Tensor:
-        m.copy_(self.justnorm(m, dim=dim))
-
     @torch.no_grad()
     def normalize_matrices(self):
-        self._normalize_matrix(self.w_q.weight)
-        self._normalize_matrix(self.w_k.weight)
-        self._normalize_matrix(self.w_v.weight)
-        self._normalize_matrix(self.w_o.weight, dim=0)
+        normalize_matrix(self.w_q.weight)
+        normalize_matrix(self.w_k.weight)
+        normalize_matrix(self.w_v.weight)
+        normalize_matrix(self.w_o.weight, dim=0)
 
 
 class Attention(nn.Module):

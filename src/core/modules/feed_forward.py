@@ -8,6 +8,8 @@ import torch
 import torch.nn as nn
 from pydantic import BaseModel, ConfigDict
 
+from core.utils import normalize_matrix
+
 from core.utils import BufferCache, DType
 
 
@@ -82,16 +84,10 @@ class NormalizedMLP(MLP):
         sw1 = self.sw1 * ((self.sw1_init_value / self.sw1_init_scaling) * self.sqrt_d_model)
         return self.w2(self.activation(sw1 * self.w1(x)))
 
-    def justnorm(self, x: torch.Tensor, dim: int = -1) -> torch.Tensor:
-        return x / x.norm(p=2, dim=dim, keepdim=True, dtype=torch.float32).type_as(x)
-
-    def _normalize_matrix(self, m: torch.Tensor, dim: int = -1) -> torch.Tensor:
-        m.copy_(self.justnorm(m, dim=dim) * self.sqrt_d_model)
-
     @torch.no_grad()
     def normalize_matrices(self) -> None:
-        self._normalize_matrix(self.w1.weight)
-        self._normalize_matrix(self.w2.weight, dim=0)
+        normalize_matrix(self.w1.weight, scale=self.sqrt_d_model)
+        normalize_matrix(self.w2.weight, dim=0, scale=self.sqrt_d_model)
 
 
 class GLU(nn.Module):
@@ -129,17 +125,11 @@ class NormalizedGLU(GLU):
         sw3 = self.sw3 * ((self.sw_init_value / self.sw_init_scaling))
         return self.w2(self.activation(sw1 * self.w1(x)) * sw3 * self.w3(x))
 
-    def justnorm(self, x: torch.Tensor, dim: int = -1) -> torch.Tensor:
-        return x / x.norm(p=2, dim=dim, keepdim=True, dtype=torch.float32).type_as(x)
-
-    def _normalize_matrix(self, m: torch.Tensor, dim: int = -1) -> torch.Tensor:
-        m.copy_(self.justnorm(m, dim=dim))
-    
     @torch.no_grad()
     def normalize_matrices(self) -> None:
-        self._normalize_matrix(self.w1.weight)
-        self._normalize_matrix(self.w2.weight, dim=0)
-        self._normalize_matrix(self.w3.weight)
+        normalize_matrix(self.w1.weight)
+        normalize_matrix(self.w2.weight, dim=0)
+        normalize_matrix(self.w3.weight)
 
 
 class FeedForward(nn.Module):

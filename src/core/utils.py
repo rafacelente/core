@@ -46,3 +46,19 @@ def is_sm100_or_higher() -> bool:
     Check if the current device is a SM100 or higher.
     """
     return torch.cuda.get_device_capability() >= (10, 0)
+
+
+def justnorm(x: torch.Tensor, dim: int = -1) -> torch.Tensor:
+    """L2-normalize *x* along *dim*, keeping the original dtype."""
+    return x / x.norm(p=2, dim=dim, keepdim=True, dtype=torch.float32).type_as(x)
+
+
+@torch.no_grad()
+def normalize_matrix(
+    m: torch.Tensor, dim: int = -1, *, scale: float | None = None
+) -> None:
+    """In-place L2-normalize *m* along *dim*, optionally rescaling by *scale*."""
+    normed = justnorm(m, dim=dim)
+    if scale is not None:
+        normed = normed * scale
+    m.copy_(normed)
