@@ -113,6 +113,7 @@ def setup_logger(
         "weight_decay": config.weight_decay,
         "max_epochs": config.max_epochs,
         "max_steps": config.max_steps,
+        "max_grad_norm": config.max_grad_norm,
         
         # Optimizer config
         "optimizer": config.optimizer,
@@ -259,6 +260,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--learning-rate", type=float, default=None, help="Learning rate (default: 3e-4)")
     parser.add_argument("--max-epochs", type=int, default=None, help="Maximum number of epochs (default: 1)")
     parser.add_argument("--max-steps", type=int, default=None, help="Maximum number of steps (overrides epochs)")
+    parser.add_argument("--max-grad-norm", type=float, default=None, help="Max gradient norm for clipping (default: 1.0)")
     parser.add_argument("--sequence-length", type=int, default=None, help="Sequence length (default: 2048)")
 
     # Kernel optimizations ------------------------------------------------------
@@ -313,6 +315,7 @@ _CLI_ARG_TO_CONFIG_FIELD = {
     "learning_rate": "learning_rate",
     "max_epochs": "max_epochs",
     "max_steps": "max_steps",
+    "max_grad_norm": "max_grad_norm",
     "sequence_length": "sequence_length",
     "project_name": "project_name",
     "experiment_name": "experiment_name",
@@ -449,6 +452,7 @@ def main():
         num_nodes=config.num_nodes,
         strategy=strategy,
         precision=config.precision,
+        gradient_clip_val=config.max_grad_norm,
         callbacks=callbacks,
         logger=wandb_logger,
         profiler=profiler,
