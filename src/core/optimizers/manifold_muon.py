@@ -1,4 +1,6 @@
 import math
+from typing import Optional
+
 import torch
 
 ABC_LIST: list[tuple[float, float, float]] = [
@@ -74,43 +76,6 @@ def manifold_muon(W, G, eta=0.1, alpha=0.01, steps=100, tol=1e-6):
     new_W = msign(new_W)
     # Restore the shape of the solution and return
     return new_W.T if should_tranpose else new_W
-
-
-import math
-from typing import Optional
-import os
-
-import torch
-
-
-# https://github.com/KellerJordan/Muon/blob/master/muon.py
-@torch.compile
-def zeropower_via_newtonschulz5(G, steps):
-    """
-    Newton-Schulz iteration to compute the zeroth power / orthogonalization of G. We opt to use a
-    quintic iteration whose coefficients are selected to maximize the slope at zero. For the purpose
-    of minimizing steps, it turns out to be empirically effective to keep increasing the slope at
-    zero even beyond the point where the iteration no longer converges all the way to one everywhere
-    on the interval. This iteration therefore does not produce UV^T but rather something like US'V^T
-    where S' is diagonal with S_{ii}' ~ Uniform(0.5, 1.5), which turns out not to hurt model
-    performance at all relative to UV^T, where USV^T = G is the SVD.
-    """
-    assert len(G.shape) == 2
-    a, b, c = (3.4445, -4.7750, 2.0315)
-    X = G.bfloat16()
-    if G.size(0) > G.size(1):
-        X = X.T
-    # Ensure spectral norm is at most 1
-    X = X / (X.norm() + 1e-7)
-    # Perform the NS iterations
-    for _ in range(steps):
-        A = X @ X.T
-        B = b * A + c * A @ A  # adapted from suggestion by @jxbz, @leloykun, and @YouJiacheng
-        X = a * X + B @ X
-
-    if G.size(0) > G.size(1):
-        X = X.T
-    return X
 
 
 class ManifoldMuon(torch.optim.Optimizer):
@@ -231,7 +196,7 @@ def configure_manifold_muon(
     skip_adjust_lr: bool = False,
     ns_steps: int = 5,
     print_param_names: bool = False
-) -> list[torch.optim.Optimizer]:
+) -> ManifoldMuon:
     """
     Helper function to configure Muon optimizer for language/transactional model training with
     AdamW optimizer for non-matrix parameters.
@@ -295,7 +260,7 @@ def configure_manifold_muon(
         for name in scalar_param_names:
             print(f"  {name}")
 
-    return Muon(
+    return ManifoldMuon(
         lr=lr,
         wd=weight_decay,
         muon_params=matrix_params,
