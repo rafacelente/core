@@ -56,6 +56,7 @@ class MLP(nn.Module):
         dtype: torch.dtype = torch.float32,
     ):
         super().__init__()
+        self.d_model = d_model
         self.w1 = nn.Linear(in_features=d_model, out_features=hidden_size, dtype=dtype, bias=False)
         self.activation = Activation.build(activation_type)
         self.w2 = nn.Linear(in_features=hidden_size, out_features=d_model, dtype=dtype, bias=False)

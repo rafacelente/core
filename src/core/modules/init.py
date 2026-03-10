@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 
 from core.modules.attention import Attention
-from core.modules.feed_forward import FeedForward, FeedForwardType
+from core.modules.feed_forward import FeedForward, GLU, MLP
 
 
 class InitMethod(str, Enum):
@@ -77,7 +77,7 @@ class InitMethod(str, Enum):
     def init_feed_forward(
         self, module: FeedForward, d_model: int, num_blocks: int, generator: Optional[torch.Generator] = None
     ) -> None:
-        if module.type == FeedForwardType.GLU:
+        if isinstance(module, GLU):
             self._init_feed_forward_glu(module, num_blocks, generator)
-        elif module.type == FeedForwardType.MLP:
+        elif isinstance(module, MLP):
             self._init_feed_forward_mlp(module, num_blocks, generator)

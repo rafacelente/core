@@ -4,7 +4,6 @@ from typing import cast
 
 import torch
 import torch.nn as nn
-from quack.rmsnorm import QuackRMSNorm
 from pydantic import BaseModel, ConfigDict
 from core.utils import is_sm100_or_higher, DType
 
@@ -31,6 +30,13 @@ class LayerNorm(nn.Module):
             return cast(LayerNorm, nn.RMSNorm(hidden_size, eps=eps, **kwargs))
         elif type == LayerNormType.RMS_FAST:
             if is_sm100_or_higher():
+                try:
+                    from quack.rmsnorm import QuackRMSNorm
+                except ImportError as exc:
+                    raise ImportError(
+                        "RMS_FAST requires the 'quack-kernels' package. "
+                        "Install it with: pip install 'core[gpu]'"
+                    ) from exc
                 return cast(LayerNorm, QuackRMSNorm(hidden_size, eps=eps, **kwargs))
             else:
                 device_capability = torch.cuda.get_device_capability()
