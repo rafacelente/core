@@ -2,7 +2,10 @@ import pytest
 import torch
 import math
 
-from core.config import AttentionConfig, FeedForwardConfig, LayerNormConfig, DType
+from core.modules.attention import AttentionConfig
+from core.modules.feed_forward import FeedForwardConfig
+from core.modules.layer_norm import LayerNormConfig
+from core.utils import DType
 from core.models.model_config import CoreConfig
 from core.models.model import CoreModel, NormalizedCoreModel
 from core.models.model_utils import CoreOutput

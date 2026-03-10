@@ -1,8 +1,12 @@
 import pytest
 import torch
 
-from core.config import AttentionConfig, FeedForwardConfig, LayerNormConfig
-from core.models.model_config import CoreConfig
+from core.modules.attention import AttentionConfig, AttentionType
+from core.modules.feed_forward import FeedForwardConfig, FeedForwardType, ActivationType
+from core.modules.layer_norm import LayerNormConfig
+from core.modules.loss import LossConfig
+from core.utils import DType
+from core.models.model_config import CoreConfig, CoreType
 from core.models.model import CoreModel
 from core.models.model_utils import CoreOutput
 
@@ -100,3 +104,90 @@ def test_simple_forward(core_config: CoreConfig):
 
     except Exception as e:
         pytest.fail(f"Model forward pass failed with error: {e}")
+
+
+def test_forward_with_labels(core_config: CoreConfig):
+    """Tests forward pass with labels computes a non-negative loss."""
+    batch_size = 2
+    seq_len = 10
+    device = torch.device("cpu")
+
+    model = CoreModel(
+        d_model=core_config.d_model,
+        n_layers=core_config.n_layers,
+        vocab_size=core_config.vocab_size,
+        attention_config=core_config.attention,
+        feed_forward_config=core_config.feed_forward,
+        layer_norm_config=core_config.layer_norm,
+        loss_config=core_config.loss,
+        dtype=core_config.dtype,
+    )
+    model.init_weights(max_seq_len=seq_len)
+    model.eval()
+
+    input_ids = torch.randint(0, core_config.vocab_size, (batch_size, seq_len), device=device)
+    labels = torch.randint(0, core_config.vocab_size, (batch_size, seq_len), device=device)
+
+    with torch.no_grad():
+        output = model(input_ids=input_ids, labels=labels)
+
+    assert isinstance(output, CoreOutput)
+    assert output.logits.shape == (batch_size, seq_len, core_config.vocab_size)
+    assert output.loss is not None
+    assert output.loss.item() >= 0
+
+
+def test_config_build_creates_model(core_config: CoreConfig):
+    """Tests that CoreConfig.build() produces a working CoreModel."""
+    model = core_config.build()
+
+    assert isinstance(model, CoreModel)
+    assert model.d_model == core_config.d_model
+    assert model.n_layers == core_config.n_layers
+    assert model.vocab_size == core_config.vocab_size
+
+    batch_size = 2
+    seq_len = 10
+    input_ids = torch.randint(0, core_config.vocab_size, (batch_size, seq_len))
+
+    with torch.no_grad():
+        output = model(input_ids=input_ids)
+
+    assert output.logits.shape == (batch_size, seq_len, core_config.vocab_size)
+
+
+def test_model_parameter_counts(core_config: CoreConfig):
+    """Tests that parameter counting methods return consistent values."""
+    model = core_config.build()
+
+    total_params = model.num_parameters()
+    trainable_params = model.num_trainable_parameters()
+
+    assert total_params > 0
+    assert trainable_params > 0
+    assert trainable_params <= total_params
+
+    manual_count = sum(p.numel() for p in model.parameters())
+    assert total_params == manual_count
+
+
+def test_all_public_config_classes_importable():
+    """Validates that the key configuration classes are importable from their
+    canonical module paths — the same paths used by the rest of the test suite.
+    """
+    assert issubclass(AttentionConfig, object)
+    assert issubclass(FeedForwardConfig, object)
+    assert issubclass(LayerNormConfig, object)
+    assert issubclass(LossConfig, object)
+    assert issubclass(CoreConfig, object)
+
+    assert hasattr(AttentionType, "DEFAULT")
+    assert hasattr(AttentionType, "NORMALIZED")
+    assert hasattr(FeedForwardType, "MLP")
+    assert hasattr(FeedForwardType, "GLU")
+    assert hasattr(ActivationType, "GELU")
+    assert hasattr(ActivationType, "SILU")
+    assert hasattr(CoreType, "BASE")
+    assert hasattr(CoreType, "NORMALIZED")
+    assert hasattr(DType, "FLOAT32")
+    assert hasattr(DType, "BFLOAT16")
