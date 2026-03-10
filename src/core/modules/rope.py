@@ -9,7 +9,6 @@ from einops import repeat, rearrange
 
 
 from core.utils import BufferCache
-from core.kernels.triton.rotary import apply_rotary_emb as apply_rotary_emb_triton
 
 
 class RoPEType(str, Enum):
@@ -86,6 +85,13 @@ class RoPE(nn.Module):
 
     def _apply_rotary_embedding(self, x, cos: torch.Tensor, sin: torch.Tensor, interleaved: bool = False) -> torch.Tensor:
         if self.use_fused:
+            try:
+                from core.kernels.triton.rotary import apply_rotary_emb as apply_rotary_emb_triton
+            except ImportError as exc:
+                raise ImportError(
+                    "Fused RoPE requires the 'triton' package (Linux + CUDA only). "
+                    "Disable fused_rope or run on a Linux machine with a GPU."
+                ) from exc
             return apply_rotary_emb_triton(x, cos, sin, interleaved)
         else:
             ro_dim = cos.shape[-1] * 2

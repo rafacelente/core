@@ -23,7 +23,7 @@ class CoreModel(nn.Module):
         attention_config: AttentionConfig,
         feed_forward_config: FeedForwardConfig,
         layer_norm_config: LayerNormConfig,
-        loss_config: LossConfig,
+        loss_config: Optional[LossConfig] = None,
         output_norm_config: Optional[LayerNormConfig] = None,
         dropout: float = 0.0,
         dtype: DType = DType.FLOAT32,
@@ -31,6 +31,8 @@ class CoreModel(nn.Module):
         init_seed: int = 42,
     ):
         super().__init__()
+        if loss_config is None:
+            loss_config = LossConfig()
 
         cache = BufferCache()
         self.d_model = d_model
@@ -147,14 +149,14 @@ class NormalizedCoreModel(CoreModel):
         attention_config: AttentionConfig,
         feed_forward_config: FeedForwardConfig,
         layer_norm_config: LayerNormConfig,
-        loss_config: LossConfig,
+        loss_config: Optional[LossConfig] = None,
         output_norm_config: Optional[LayerNormConfig] = None,
         dropout: float = 0.0,
         dtype: DType = DType.FLOAT32,
         init_method: InitMethod = InitMethod.NORMALIZED,
         init_seed: int = 42,
     ):
-        super().__init__(d_model, n_layers, vocab_size, attention_config, feed_forward_config, layer_norm_config, loss_config, dropout, dtype, init_method, init_seed)
+        super().__init__(d_model, n_layers, vocab_size, attention_config, feed_forward_config, layer_norm_config, loss_config, output_norm_config, dropout, dtype, init_method, init_seed)
         if self.dropout > 0.0:
             raise ValueError("NormalizedCoreModel does not support dropout")
         del self.blocks
