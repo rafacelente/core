@@ -8,10 +8,10 @@ import torch.nn.functional as F
 from torch.nn.attention import SDPBackend
 from pydantic import BaseModel, ConfigDict, Field
 
-from core.utils import justnorm, normalize_matrix
+from core.utils import normalize_matrix
 
-from core.modules.layer_norm import LayerNorm, LayerNormType, LayerNormConfig
-from core.modules.rope import RoPEType, RoPEConfig
+from core.modules.layer_norm import LayerNorm, LayerNormConfig
+from core.modules.rope import RoPEConfig
 from core.utils import BufferCache
 from core.modules.feed_forward import Activation, ActivationType
 
