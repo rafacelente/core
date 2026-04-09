@@ -1,13 +1,18 @@
 from dataclasses import dataclass, field, fields
+from enum import Enum
 from typing import Any, Dict, Optional, Union
 from pathlib import Path
-
 import yaml
 
 from core.optimizers.optimizer_utils import OptimizerName
 from core.modules.feed_forward import ActivationType
 from core.models.model_recipes import ModelRecipe
 from core.optimizations import KernelOptimizations
+
+
+class LoggerType(str, Enum):
+    WANDB = "wandb"
+    MLFLOW = "mlflow"
 
 
 @dataclass
@@ -63,6 +68,7 @@ class TrainingConfig:
     save_top_k: int = 1
     monitor_metric: str = "val_loss"
     log_model: bool = False
+    logger_type: LoggerType = LoggerType.WANDB
     
     # Profiling and debugging
     enable_profiling: bool = False
