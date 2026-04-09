@@ -52,6 +52,8 @@ class TrainingConfig:
     data_preprocessing_num_proc: int = 8
     max_train_size: Optional[int] = None
     max_val_size: Optional[int] = None
+    use_pretokenized_dataset: bool = False
+    pretokenized_dataset_path: Optional[str] = None
     
     # Hardware configuration
     precision: str = "bf16-mixed"

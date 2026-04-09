@@ -5,6 +5,7 @@ from typing import List, Optional, Union
 
 import torch
 import lightning as L
+import litdata
 from lightning import Trainer
 from lightning.pytorch.strategies import FSDPStrategy
 from lightning.pytorch.loggers import WandbLogger, MLFlowLogger
@@ -21,13 +22,27 @@ from core.optimizers.optimizer_utils import OptimizerName
 from core.training.training_config import TrainingConfig, LoggerType
 from core.models.model_recipes import ModelRecipe
 from core.training.data.fineweb import FineWebDataModule
+from core.training.data.gcs_pretokenized_fineweb import TokenizedFinewebDataModule, load_tokenized_dataset_metadata
 from core.training.callbacks.profiler_callback import ThroughputMeasureCallback
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+def _distributed_barrier() -> None:
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
+    if world_size <= 1:
+        return
+    
+    if not torch.distributed.is_initialized():
+        backend = "nccl" if torch.cuda.is_available() else "gloo"
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
+        device_id = torch.device(f"cuda:{local_rank}") if torch.cuda.is_available() else None
+        torch.distributed.init_process_group(backend=backend, device_id=device_id)
+    
+    torch.distributed.barrier()
 
-def create_model_config(training_config: TrainingConfig, vocab_size: int) -> CoreConfig:
+
+def create_model_config(training_config: TrainingConfig, vocab_size: int, pad_token_id: int) -> CoreConfig:
     """Create model configuration from training config using the model recipe registry.
     """
     recipe = ModelRecipe.get_recipe(training_config.model_type)
@@ -38,6 +53,7 @@ def create_model_config(training_config: TrainingConfig, vocab_size: int) -> Cor
         transformer_type=training_config.transformer_type,
         use_post_sdpa_gate=training_config.use_post_sdpa_gate,
         gate_activation_type=training_config.gate_activation_type,
+        pad_token_id=pad_token_id,
     )
     optimizations = training_config.kernel_optimizations
     if optimizations.any_enabled():
@@ -393,24 +409,55 @@ def main():
     logger.info(f"Starting training with configuration: {config}")
     
     L.seed_everything(config.seed, workers=True)
+
+    if config.use_pretokenized_dataset:
+        metadata = load_tokenized_dataset_metadata(config.pretokenized_dataset_path)
+        vocab_size = metadata.vocab_size
+        pad_token_id = metadata.pad_token_id
+        dataset_size = metadata.train_size
+
+        logger.info(f"Loaded metadata from {config.pretokenized_dataset_path}")
+        logger.info(f"  Tokenizer: {metadata.tokenizer_name}, Vocab size: {vocab_size}")
+        logger.info(f"  Train size: {metadata.train_size}, Val size: {metadata.val_size}")
+        global_rank = int(os.environ.get("RANK", 0))
+
+        if global_rank == 0:
+            logger.info("[Global Rank 0] Indexing datasets...")
+            litdata.index_parquet_dataset(f"{config.pretokenized_dataset_path}/train")
+            if metadata.val_size is not None:
+                litdata.index_parquet_dataset(f"{config.pretokenized_dataset_path}/val")
+            logger.info("[Global Rank 0] Indexing complete.")
+
+        _distributed_barrier()
+        if global_rank != 0:
+            logger.info(f"[Global Rank {global_rank}] Indexing complete, proceeding.")
+        
+        data_module = TokenizedFinewebDataModule(
+            train_dataset_path=f"{config.pretokenized_dataset_path}/train",
+            val_dataset_path=f"{config.pretokenized_dataset_path}/val" if metadata.val_size is not None else None,
+            batch_size=config.batch_size,
+            num_workers=config.data_preprocessing_num_proc,
+        )
+    else:
+        data_module = FineWebDataModule(
+            sequence_length=config.sequence_length,
+            batch_size=config.batch_size,
+            num_proc=config.data_preprocessing_num_proc,
+            dataset_name=config.dataset_name,
+            dataset_config=config.dataset_config,
+            max_train_size=config.max_train_size,
+            max_val_size=config.max_val_size,
+            enable_profiling=config.enable_profiling,
+        )
     
-    data_module = FineWebDataModule(
-        sequence_length=config.sequence_length,
-        batch_size=config.batch_size,
-        num_proc=config.data_preprocessing_num_proc,
-        dataset_name=config.dataset_name,
-        dataset_config=config.dataset_config,
-        max_train_size=config.max_train_size,
-        max_val_size=config.max_val_size,
-        enable_profiling=config.enable_profiling,
-    )
+        data_module.setup("fit")
+        vocab_size = data_module.tokenizer.vocab_size
+        pad_token_id = data_module.tokenizer.pad_token_id
+        dataset_size = len(data_module.train_dataset)
+
+    logger.info(f"Vocab size: {vocab_size}, Pad token ID: {pad_token_id}")
     
-    data_module.setup("fit")
-    vocab_size = data_module.tokenizer.vocab_size
-    
-    # Calculate num_iterations for learning rate schedulers that need it
     num_devices = get_num_devices(config.devices, config.num_nodes)
-    dataset_size = len(data_module.train_dataset)
     
     num_iterations = calculate_num_iterations(
         dataset_size=dataset_size,
@@ -426,7 +473,8 @@ def main():
         updated_lr_scheduler_kwargs["num_iterations"] = num_iterations
         logger.info(f"Added num_iterations={num_iterations} to {config.lr_scheduler} scheduler kwargs")
     
-    model_config = create_model_config(config, vocab_size)
+    assert pad_token_id is not None, "Pad token ID is required"
+    model_config = create_model_config(config, vocab_size, pad_token_id)
     logger.info(f"Model config: {model_config}")
     
     from dataclasses import replace
