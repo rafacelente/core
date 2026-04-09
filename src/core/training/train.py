@@ -7,7 +7,7 @@ import torch
 import lightning as L
 from lightning import Trainer
 from lightning.pytorch.strategies import FSDPStrategy
-from lightning.pytorch.loggers import WandbLogger
+from lightning.pytorch.loggers import WandbLogger, MLFlowLogger
 from lightning.pytorch.callbacks import (
     ModelCheckpoint,
     LearningRateMonitor,
@@ -18,7 +18,7 @@ import wandb
 from core.models.model_config import CoreConfig
 from core.training.lightning_model import CoreLightningModel
 from core.optimizers.optimizer_utils import OptimizerName
-from core.training.training_config import TrainingConfig
+from core.training.training_config import TrainingConfig, LoggerType
 from core.models.model_recipes import ModelRecipe
 from core.training.data.fineweb import FineWebDataModule
 from core.training.callbacks.profiler_callback import ThroughputMeasureCallback
@@ -89,11 +89,11 @@ def setup_logger(
     tokenizer_vocab_size: int,
     num_devices: Optional[int] = None, 
     num_iterations: Optional[int] = None,
-) -> WandbLogger:
+) -> Union[WandbLogger, MLFlowLogger]:
     """Setup WandB logger with comprehensive config"""
     run_name = config.experiment_name or f"{config.model_type}-{config.optimizer}-{config.transformer_type}"
     
-    wandb_config = {
+    logger_config = {
         # Model config
         "model_type": config.model_type,
         "transformer_type": config.transformer_type,
@@ -135,19 +135,31 @@ def setup_logger(
     }
     
     if num_devices is not None:
-        wandb_config["num_devices"] = num_devices
-        wandb_config["effective_batch_size_total"] = config.batch_size * config.gradient_accumulation_steps * num_devices
+        logger_config["num_devices"] = num_devices
+        logger_config["effective_batch_size_total"] = config.batch_size * config.gradient_accumulation_steps * num_devices
     
     if num_iterations is not None:
-        wandb_config["num_iterations"] = num_iterations
-    
-    return WandbLogger(
-        project=config.project_name,
-        name=run_name,
-        config=wandb_config,
-        save_dir=str(config.save_dir),
-        log_model=True,
-    )
+        logger_config["num_iterations"] = num_iterations
+
+    if config.logger_type == LoggerType.WANDB:
+        return WandbLogger(
+            project=config.project_name,
+            name=run_name,
+            config=logger_config,
+            save_dir=str(config.save_dir),
+            log_model=True,
+        )
+    elif config.logger_type == LoggerType.MLFLOW:
+        logger = MLFlowLogger(
+            experiment_name=config.project_name,
+            run_name=run_name,
+            save_dir=str(config.save_dir),
+            log_model=True,
+        )
+        logger.log_hyperparams(logger_config)
+        return logger
+    else:
+        raise ValueError(f"Unknown logger type: {config.logger_type}")
 
 
 def calculate_num_iterations(
@@ -281,6 +293,8 @@ def _build_parser() -> argparse.ArgumentParser:
                        help="Validation check interval (default: 0.1)")
     parser.add_argument("--save-top-k", type=int, default=None, help="Save top k checkpoints (default: 1)")
     parser.add_argument("--monitor-metric", type=str, default=None, help="Metric to monitor (default: val_loss)")
+    parser.add_argument("--logger-type", type=str, default=None, choices=[logger_type.value for logger_type in LoggerType],
+                       help="Logger type (default: wandb)")
 
     # Hardware configuration ----------------------------------------------------
     parser.add_argument("--devices", type=str, default=None, help="Devices to use (default: auto)")
