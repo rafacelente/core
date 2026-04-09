@@ -35,6 +35,7 @@ data:
   data_preprocessing_num_proc: 8
   max_train_size: 10000              # null means use the full dataset
   max_val_size: 10000
+  use_pretokenized_dataset: false
 
 hardware:
   precision: bf16-mixed
@@ -51,7 +52,7 @@ logging:
   save_top_k: 1
   monitor_metric: val_loss
   log_model: false
-  logger_type: mlflow
+  logger_type: mlflow # mlflow or wandb
 
 profiling:
   enable_profiling: false

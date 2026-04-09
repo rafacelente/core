@@ -19,6 +19,9 @@ dependencies = [
     "anyscale>=0.26.58",
     "einops>=0.8.2",
     "mlflow>=3.11.1",
+    "litdata>=0.2.61",
+    "polars>=1.39.3",
+    "gcsfs>=2024.6.1",
 ]
 
 [project.optional-dependencies]
