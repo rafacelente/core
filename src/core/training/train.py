@@ -298,6 +298,8 @@ def _build_parser() -> argparse.ArgumentParser:
                        help="Use fused cross-entropy loss kernel")
     parser.add_argument("--fused-rms-norm", action="store_true", default=None,
                        help="Use fused RMSNorm kernel (requires SM100+)")
+    parser.add_argument("--flash-attn-4", action="store_true", default=None,
+                       help="Use flash-attn-4 kernel (requires SM100+)")
 
     # Logging and checkpointing -------------------------------------------------
     parser.add_argument("--project-name", type=str, default=None, help="WandB project name (default: muon-8bit)")
@@ -366,6 +368,7 @@ _CLI_ARG_TO_CONFIG_FIELD = {
     "fused_rope": "fused_rope",
     "fused_cross_entropy": "fused_cross_entropy",
     "fused_rms_norm": "fused_rms_norm",
+    "flash_attn_4": "flash_attn_4",
     "seed": "seed",
     "deterministic": "deterministic",
 }

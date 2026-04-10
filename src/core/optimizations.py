@@ -77,11 +77,14 @@ class KernelOptimizations:
     fused_rms_norm : bool
         Use the fused RMSNorm kernel (requires SM100+ / Blackwell).
         Silently ignored for models that use standard `LayerNorm`
+    flash_attn_4 : bool
+        Use the flash-attn-4 kernel (requires SM100+).
     """
 
     fused_rope: bool = False
     fused_cross_entropy: bool = False
     fused_rms_norm: bool = False
+    flash_attn_4: bool = False
 
     @classmethod
     def all(cls) -> KernelOptimizations:
@@ -260,3 +263,15 @@ class FusedRMSNorm(KernelOptimization):
             "fused" if enabled else "default",
             swapped,
         )
+
+@KernelOptimization.register("flash_attn_4")
+class FlashAttn4(KernelOptimization):
+    def apply_to_config(self, config: CoreConfig, enabled: bool) -> None:
+        config.attention.use_flash_attn_4 = enabled
+
+    def apply_to_model(self, model: CoreModel, enabled: bool) -> None:
+        for block in model.blocks.values():
+            att = block.attention
+            if hasattr(att, "use_flash_attn_4"):
+                att.use_flash_attn_4 = enabled
+        logger.debug("FlashAttn4 implementation set to %s", "enabled" if enabled else "disabled")
