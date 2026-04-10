@@ -1,5 +1,6 @@
 from typing import Optional, cast
 import math
+import logging
 
 from enum import Enum
 import torch
@@ -7,6 +8,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.attention import SDPBackend
 from pydantic import BaseModel, ConfigDict, Field
+
+try:
+    from flash_attn.cute.interface import flash_attn_func
+except ImportError as exc:
+    logging.warning(f"FlashAttn4 not found: {exc}. Torch default Flash SDPA will be used instead.")
+    flash_attn_func = None
+
 
 from core.utils import normalize_matrix
 
@@ -33,6 +41,7 @@ class DefaultAttention(nn.Module):
         cache: Optional[BufferCache] = None,
         use_post_sdpa_gate: bool = False,
         gate_activation_type: ActivationType = ActivationType.SIGMOID,
+        use_flash_attn_4: bool = False,
     ):
         super().__init__()
         self.d_model = d_model
@@ -46,7 +55,8 @@ class DefaultAttention(nn.Module):
         self.dropout_p = dropout
         self.use_post_sdpa_gate = use_post_sdpa_gate
         self.dropout = nn.Dropout(dropout) if dropout > 0.0 else nn.Identity()
-
+        self.use_flash_attn_4 = use_flash_attn_4
+        
         query_size = self.n_heads * self.head_dim
         key_size = self.n_kv_heads * self.head_dim
         value_size = self.n_kv_heads * self.head_dim
@@ -71,9 +81,12 @@ class DefaultAttention(nn.Module):
             self.k_norm = self.qk_norm_config.build(hidden_size=self.head_dim)
 
     def sdpa(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
-        # q: B, T, n_heads, head_dim -> B, n_heads, T, head_dim
-        # k: B, T, n_kv_heads, head_dim -> B, n_kv_heads, T, head_dim
-        # v: B, T, n_kv_heads, head_dim -> B, n_kv_heads, T, head_dim
+        # flash-attn-4 expects (B, T, nheads, head_dim)
+        if self.use_flash_attn_4 and flash_attn_func is not None:
+            out, _ = flash_attn_func(q, k, v, causal=True)
+            return out
+
+        # Standard SDPA expects (B, nheads, T, head_dim)
         q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
         with torch.nn.attention.sdpa_kernel(
             backends=[SDPBackend.FLASH_ATTENTION, SDPBackend.CUDNN_ATTENTION, SDPBackend.MATH],
@@ -131,6 +144,7 @@ class NormalizedAttention(DefaultAttention):
         cache: Optional[BufferCache] = None,
         use_post_sdpa_gate: bool = False,
         gate_activation_type: ActivationType = ActivationType.SIGMOID,
+        use_flash_attn_4: bool = False,
     ):
         super().__init__(d_model, n_heads, n_kv_heads, head_dim, rope_config, clip_qkv, qk_norm_config, dropout, cache, use_post_sdpa_gate, gate_activation_type)
         self.sq_init_value = 1.0
@@ -227,6 +241,7 @@ class AttentionConfig(BaseModel):
     dropout: float = 0.0
     use_post_sdpa_gate: bool = False
     gate_activation_type: Optional[ActivationType] = ActivationType.SIGMOID
+    use_flash_attn_4: bool = False
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
@@ -253,4 +268,5 @@ class AttentionConfig(BaseModel):
             cache=cache,
             use_post_sdpa_gate=self.use_post_sdpa_gate,
             gate_activation_type=self.gate_activation_type,
+            use_flash_attn_4=self.use_flash_attn_4,
         )

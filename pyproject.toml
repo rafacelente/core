@@ -22,6 +22,7 @@ dependencies = [
     "litdata>=0.2.61",
     "polars>=1.39.3",
     "gcsfs>=2024.6.1",
+    "flash-attn-4>=4.0.0b8",
 ]
 
 [project.optional-dependencies]
@@ -40,6 +41,11 @@ dev = [
     "google-cloud-storage>=3.4.0",
     "matplotlib>=3.9.4",
 ]
+
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+default = true
 
 [build-system]
 requires = ["hatchling"]

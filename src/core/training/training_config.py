@@ -39,6 +39,7 @@ class TrainingConfig:
     fused_rope: bool = False
     fused_cross_entropy: bool = False
     fused_rms_norm: bool = False
+    flash_attn_4: bool = False
     
     # Optimizer configuration
     optimizer: str = "muon"
