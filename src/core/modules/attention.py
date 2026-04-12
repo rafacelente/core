@@ -19,6 +19,7 @@ except ImportError as exc:
 from core.utils import normalize_matrix
 
 from core.modules.layer_norm import LayerNorm, LayerNormConfig
+from core.modules.linear_attention import FLAConfig, GLAAttention, GatedDeltaNetAttention, GatedDeltaNet2SimpAttention
 from core.modules.rope import RoPEConfig
 from core.utils import BufferCache
 from core.modules.feed_forward import Activation, ActivationType
@@ -26,6 +27,9 @@ from core.modules.feed_forward import Activation, ActivationType
 class AttentionType(str, Enum):
     DEFAULT = "default"
     NORMALIZED = "normalized"
+    GLA = "gla"
+    GATED_DELTA_NET = "gated_delta_net"
+    GATED_DELTA_NET_2SIMP = "gated_delta_net_2simp"
 
 class DefaultAttention(nn.Module):
     def __init__(
@@ -223,6 +227,12 @@ class Attention(nn.Module):
             return cast(Attention, DefaultAttention(**kwargs))
         elif type == AttentionType.NORMALIZED:
             return cast(Attention, NormalizedAttention(**kwargs))
+        elif type == AttentionType.GLA:
+            return cast(Attention, GLAAttention(**kwargs))
+        elif type == AttentionType.GATED_DELTA_NET:
+            return cast(Attention, GatedDeltaNetAttention(**kwargs))
+        elif type == AttentionType.GATED_DELTA_NET_2SIMP:
+            return cast(Attention, GatedDeltaNet2SimpAttention(**kwargs))
         else:
             raise ValueError(f"Invalid attention type: {type}")
 
@@ -242,6 +252,7 @@ class AttentionConfig(BaseModel):
     use_post_sdpa_gate: bool = False
     gate_activation_type: Optional[ActivationType] = ActivationType.SIGMOID
     use_flash_attn_4: bool = False
+    fla: Optional[FLAConfig] = None
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
@@ -250,6 +261,16 @@ class AttentionConfig(BaseModel):
         return self.n_kv_heads or self.n_heads
 
     def build(self, d_model: int, cache: Optional[BufferCache] = None) -> "Attention":
+        if self.type in (AttentionType.GLA, AttentionType.GATED_DELTA_NET, AttentionType.GATED_DELTA_NET_2SIMP):
+            return Attention.build(
+                type=self.type,
+                d_model=d_model,
+                n_heads=self.n_heads,
+                n_kv_heads=self.n_kv_heads,
+                head_dim=self.head_dim,
+                fla_config=self.fla,
+            )
+
         if d_model % self.n_heads != 0 and self.head_dim is None:
             raise ValueError(f"d_model must be divisible by n_heads if head_dim is not provided, got d_model: {d_model}, n_heads: {self.n_heads}")
         if d_model % self.effective_kv_heads != 0 and self.head_dim is None:

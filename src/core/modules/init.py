@@ -37,6 +37,9 @@ class InitMethod(str, Enum):
         self._init_linear(module, std, generator)
 
     def init_attention(self, module: Attention, num_blocks: int, generator: Optional[torch.Generator] = None) -> None:
+        if not hasattr(module, 'w_q'):
+            return
+
         if self == InitMethod.NORMALIZED:
             std = module.d_model**-0.5
         else:

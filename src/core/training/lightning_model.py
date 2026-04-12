@@ -21,6 +21,8 @@ class CoreLightningModel(L.LightningModule):
             self.save_hyperparameters()
         self.config = config
         self.model = config.build()
+        print(f"Attention module: {type(self.model.blocks['0'].attention)}")
+        print(self.model)
         self.training_config = training_config
 
     def forward(self, *args, **kwargs):

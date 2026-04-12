@@ -23,6 +23,7 @@ dependencies = [
     "polars>=1.39.3",
     "gcsfs>=2024.6.1",
     "flash-attn-4>=4.0.0b8",
+    "flash-linear-attention",
 ]
 
 [project.optional-dependencies]
@@ -42,10 +43,16 @@ dev = [
     "matplotlib>=3.9.4",
 ]
 
+[tool.uv.sources]
+flash-linear-attention = { path = "third_party/flash-linear-attention", editable = true }
+
 [[tool.uv.index]]
 name = "pypi"
 url = "https://pypi.org/simple"
 default = true
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [build-system]
 requires = ["hatchling"]
