@@ -42,6 +42,7 @@ class DefaultAttention(nn.Module):
         use_post_sdpa_gate: bool = False,
         gate_activation_type: ActivationType = ActivationType.SIGMOID,
         use_flash_attn_4: bool = False,
+        use_xsa: bool = False,
     ):
         super().__init__()
         self.d_model = d_model
@@ -56,6 +57,7 @@ class DefaultAttention(nn.Module):
         self.use_post_sdpa_gate = use_post_sdpa_gate
         self.dropout = nn.Dropout(dropout) if dropout > 0.0 else nn.Identity()
         self.use_flash_attn_4 = use_flash_attn_4
+        self.use_xsa = use_xsa
         
         query_size = self.n_heads * self.head_dim
         key_size = self.n_kv_heads * self.head_dim
@@ -94,6 +96,10 @@ class DefaultAttention(nn.Module):
             att = F.scaled_dot_product_attention(
                 q, k, v, attn_mask=None, dropout_p=self.dropout_p, is_causal=True, enable_gqa=True
             )
+        if self.use_xsa:
+            vn = torch.nn.functional.normalize(v, dim=-1)
+            att = att - (att * vn).sum(dim=-1, keepdim=True) * vn
+
         return att.transpose(1, 2).contiguous()
 
     def forward(
@@ -203,6 +209,8 @@ class Attention(nn.Module):
         cache: Optional[BufferCache] = None,
         use_post_sdpa_gate: bool = False,
         gate_activation_type: ActivationType = ActivationType.SIGMOID,
+        use_xsa: bool = False,
+        use_flash_attn_4: bool = False,
     ):
         super().__init__()
     
@@ -241,6 +249,7 @@ class AttentionConfig(BaseModel):
     dropout: float = 0.0
     use_post_sdpa_gate: bool = False
     gate_activation_type: Optional[ActivationType] = ActivationType.SIGMOID
+    use_xsa: bool = False
     use_flash_attn_4: bool = False
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
@@ -269,4 +278,5 @@ class AttentionConfig(BaseModel):
             use_post_sdpa_gate=self.use_post_sdpa_gate,
             gate_activation_type=self.gate_activation_type,
             use_flash_attn_4=self.use_flash_attn_4,
+            use_xsa=self.use_xsa,
         )
