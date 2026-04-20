@@ -46,6 +46,7 @@ def create_model_config(training_config: TrainingConfig, vocab_size: int, pad_to
     """Create model configuration from training config using the model recipe registry.
     """
     recipe = ModelRecipe.get_recipe(training_config.model_type)
+    use_xsa = False if not hasattr(recipe, "use_xsa") else recipe.use_xsa
     config = recipe.build_config(
         vocab_size=vocab_size,
         max_sequence_length=training_config.sequence_length,
@@ -54,6 +55,7 @@ def create_model_config(training_config: TrainingConfig, vocab_size: int, pad_to
         use_post_sdpa_gate=training_config.use_post_sdpa_gate,
         gate_activation_type=training_config.gate_activation_type,
         pad_token_id=pad_token_id,
+        use_xsa=use_xsa,
     )
     optimizations = training_config.kernel_optimizations
     if optimizations.any_enabled():

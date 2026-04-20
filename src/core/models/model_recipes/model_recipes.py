@@ -143,6 +143,7 @@ class LLaMARecipe(ModelRecipe):
         gate_activation_type: str = "sigmoid",
         pad_token_id: int = 50256,
         rope_theta: int = 10_000,
+        use_xsa: bool = False,
     ) -> CoreConfig:
         return CoreConfig(
             transformer_type=CoreType(transformer_type),
@@ -157,6 +158,7 @@ class LLaMARecipe(ModelRecipe):
                 clip_qkv=None,
                 use_post_sdpa_gate=use_post_sdpa_gate,
                 gate_activation_type=gate_activation_type,
+                use_xsa=use_xsa,
             ),
             output_norm=LayerNormConfig(layer_norm_type="rms", eps=1e-5),
             feed_forward=FeedForwardConfig(
@@ -195,3 +197,11 @@ class LLaMALargeRecipe(LLaMARecipe):
     d_model = 1280
     n_heads = 20
     ff_hidden_size = 3072
+
+@ModelRecipe.register("llama-xsa-small")
+class LLaMAXSASmallRecipe(LLaMARecipe):
+    n_layers = 12
+    d_model = 768
+    n_heads = 12
+    ff_hidden_size = 2304
+    use_xsa = True
