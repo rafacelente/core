@@ -29,6 +29,7 @@ class CoreModel(nn.Module):
         dtype: DType = DType.FLOAT32,
         init_method: InitMethod = InitMethod.NORMAL,
         init_seed: int = 42,
+        label_weights: Optional[torch.Tensor] = None,
     ):
         super().__init__()
         if loss_config is None:
@@ -68,6 +69,11 @@ class CoreModel(nn.Module):
         self.init_seed = torch.Generator().manual_seed(init_seed)
 
         self.loss_fn = loss_config.build()
+
+        if label_weights is not None:
+            self.register_buffer("label_weights", label_weights)
+        else:
+            self.register_buffer("label_weights", torch.ones(vocab_size))
 
         self._cache = cache
         self._device: Optional[torch.device] = None
@@ -136,7 +142,7 @@ class CoreModel(nn.Module):
             labels = labels.to(logits.device)
             shift_logits = logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
-            loss = self.loss_fn(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+            loss = self.loss_fn(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1), weight=self.label_weights)
             return CoreOutput(logits=logits, loss=loss)
         return CoreOutput(logits=logits)
 
@@ -155,8 +161,9 @@ class NormalizedCoreModel(CoreModel):
         dtype: DType = DType.FLOAT32,
         init_method: InitMethod = InitMethod.NORMALIZED,
         init_seed: int = 42,
+        label_weights: Optional[torch.Tensor] = None,
     ):
-        super().__init__(d_model, n_layers, vocab_size, attention_config, feed_forward_config, layer_norm_config, loss_config, output_norm_config, dropout, dtype, init_method, init_seed)
+        super().__init__(d_model, n_layers, vocab_size, attention_config, feed_forward_config, layer_norm_config, loss_config, output_norm_config, dropout, dtype, init_method, init_seed, label_weights=label_weights)
         if self.dropout > 0.0:
             raise ValueError("NormalizedCoreModel does not support dropout")
         del self.blocks

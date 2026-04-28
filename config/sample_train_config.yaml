@@ -21,6 +21,7 @@ optimizations:
   fused_rope: false         
   fused_cross_entropy: false
   fused_rms_norm: false
+  flash_attn_4: false
 
 optimizer:
   optimizer: adamw                   # one of: adam, adamw, muon, sgd

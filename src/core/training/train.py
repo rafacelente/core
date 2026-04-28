@@ -66,6 +66,8 @@ def create_model_config(training_config: TrainingConfig, vocab_size: int, pad_to
             f"Vocab size padded from {vocab_size} to {config.vocab_size} "
             f"(required by fused cross-entropy kernel)"
         )
+    if training_config.label_weights_path is not None:
+        config.label_weights_path = training_config.label_weights_path
     return config
 
 
