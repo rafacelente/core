@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import logging
 from enum import Enum
 from typing import Optional, TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, model_validator, Field
 from typing_extensions import Self
+import torch
 import yaml
 
 from core.modules.init import InitMethod
@@ -45,6 +47,7 @@ class CoreConfig(BaseModel):
     max_sequence_length: int
 
     pad_token_id: int = -100
+    label_weights_path: Optional[str] = None
 
     model_config = ConfigDict(validate_assignment=True)
 
@@ -80,6 +83,13 @@ class CoreConfig(BaseModel):
         return config
 
     def build(self) -> CoreModel:
+        logger = logging.getLogger(__name__)
+        label_weights = None
+        if self.label_weights_path is not None:
+            label_weights = torch.load(self.label_weights_path, weights_only=True)
+            logger.info(f"Loaded label weights from {self.label_weights_path} "
+                        f"(shape={label_weights.shape})")
+
         if self.transformer_type == CoreType.NORMALIZED:
             model = NormalizedCoreModel(
                 n_layers=self.n_layers,
@@ -94,21 +104,23 @@ class CoreConfig(BaseModel):
                 init_seed=self.init_seed,
                 vocab_size=self.vocab_size,
                 loss_config=self.loss,
+                label_weights=label_weights,
             )
         else:
             model = CoreModel(
-            n_layers=self.n_layers,
-            d_model=self.d_model,
-            attention_config=self.attention,
-            feed_forward_config=self.feed_forward,
-            layer_norm_config=self.layer_norm,
-            output_norm_config=self.output_norm,
-            dropout=self.dropout,
-            dtype=self.dtype,
-            init_method=self.init_method,
-            init_seed=self.init_seed,
-            vocab_size=self.vocab_size,
-            loss_config=self.loss,
-        )
+                n_layers=self.n_layers,
+                d_model=self.d_model,
+                attention_config=self.attention,
+                feed_forward_config=self.feed_forward,
+                layer_norm_config=self.layer_norm,
+                output_norm_config=self.output_norm,
+                dropout=self.dropout,
+                dtype=self.dtype,
+                init_method=self.init_method,
+                init_seed=self.init_seed,
+                vocab_size=self.vocab_size,
+                loss_config=self.loss,
+                label_weights=label_weights,
+            )
         model.init_weights(max_seq_len=self.max_sequence_length)
         return model

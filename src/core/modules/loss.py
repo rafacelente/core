@@ -40,8 +40,8 @@ class CrossEntropyLoss(Loss):
         super().__init__()
         self.ignore_index = ignore_index
 
-    def forward(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-        return F.cross_entropy(logits, labels, ignore_index=self.ignore_index)
+    def forward(self, logits: torch.Tensor, labels: torch.Tensor, **kwargs) -> torch.Tensor:
+        return F.cross_entropy(logits, labels, ignore_index=self.ignore_index, **kwargs)
 
 
 class FusedCrossEntropyLoss(Loss):

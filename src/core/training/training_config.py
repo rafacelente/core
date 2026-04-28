@@ -55,6 +55,7 @@ class TrainingConfig:
     max_val_size: Optional[int] = None
     use_pretokenized_dataset: bool = False
     pretokenized_dataset_path: Optional[str] = None
+    label_weights_path: Optional[str] = None
     
     # Hardware configuration
     precision: str = "bf16-mixed"
@@ -128,7 +129,7 @@ class TrainingConfig:
             optimizer:  optimizer, optimizer_kwargs, lr_scheduler,
                         lr_scheduler_kwargs
             data:       dataset_name, dataset_config, data_preprocessing_num_proc,
-                        max_train_size, max_val_size
+                        max_train_size, max_val_size, label_weights_path
             hardware:   precision, strategy, devices, num_nodes
             logging:    project_name, experiment_name, save_dir,
                         log_every_n_steps, val_check_interval, save_top_k,
