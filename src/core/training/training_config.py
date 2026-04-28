@@ -24,6 +24,7 @@ class TrainingConfig:
     gate_activation_type: ActivationType = ActivationType.SIGMOID
     sequence_length: int = 2048
     vocab_size: Optional[int] = None
+    core_config: Optional[Dict[str, Any]] = None
     
     # Training configuration
     batch_size: int = 8
@@ -85,9 +86,10 @@ class TrainingConfig:
     deterministic: bool = False
 
     def __post_init__(self):
-        available_recipes = ModelRecipe.get_available_recipes()
-        if self.model_type not in available_recipes:
-            raise ValueError(f"Unknown model type: {self.model_type}. Available: {available_recipes}")
+        if self.core_config is None:
+            available_recipes = ModelRecipe.get_available_recipes()
+            if self.model_type not in available_recipes:
+                raise ValueError(f"Unknown model type: {self.model_type}. Available: {available_recipes}")
         
         if self.optimizer not in [opt.value for opt in OptimizerName]:
             raise ValueError(f"Unknown optimizer: {self.optimizer}. Available: {[opt.value for opt in OptimizerName]}")

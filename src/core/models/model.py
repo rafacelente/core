@@ -10,6 +10,7 @@ from core.modules.init import InitMethod
 from core.modules.loss import LossConfig
 from core.modules.feed_forward import FeedForwardConfig
 from core.modules.layer_norm import LayerNormConfig
+from core.modules.linear import LinearConfig
 from core.utils import BufferCache, get_default_device, DType, normalize_matrix
 from core.models.model_utils import CoreOutput
 
@@ -30,10 +31,13 @@ class CoreModel(nn.Module):
         init_method: InitMethod = InitMethod.NORMAL,
         init_seed: int = 42,
         label_weights: Optional[torch.Tensor] = None,
+        lm_linear_config: Optional[LinearConfig] = None,
     ):
         super().__init__()
         if loss_config is None:
             loss_config = LossConfig()
+        if lm_linear_config is None:
+            lm_linear_config = LinearConfig()
 
         cache = BufferCache()
         self.d_model = d_model
@@ -59,7 +63,7 @@ class CoreModel(nn.Module):
                 cache=cache,
             )
             self.blocks[str(block_idx)] = block
-        self.lm_head = nn.Linear(d_model, vocab_size, dtype=dtype.to_torch_dtype(), bias=False)
+        self.lm_head = lm_linear_config.build(d_model, vocab_size, dtype=dtype.to_torch_dtype(), bias=False)
         if self.output_norm_config is not None:
             self.output_norm = self.output_norm_config.build(hidden_size=d_model)
         else:
@@ -162,8 +166,9 @@ class NormalizedCoreModel(CoreModel):
         init_method: InitMethod = InitMethod.NORMALIZED,
         init_seed: int = 42,
         label_weights: Optional[torch.Tensor] = None,
+        lm_linear_config: Optional[LinearConfig] = None,
     ):
-        super().__init__(d_model, n_layers, vocab_size, attention_config, feed_forward_config, layer_norm_config, loss_config, output_norm_config, dropout, dtype, init_method, init_seed, label_weights=label_weights)
+        super().__init__(d_model, n_layers, vocab_size, attention_config, feed_forward_config, layer_norm_config, loss_config, output_norm_config, dropout, dtype, init_method, init_seed, label_weights=label_weights, lm_linear_config=lm_linear_config)
         if self.dropout > 0.0:
             raise ValueError("NormalizedCoreModel does not support dropout")
         del self.blocks

@@ -1,0 +1,55 @@
+model:
+  core_config:
+    transformer_type: base
+    n_layers: 12
+    d_model: 768
+    attention:
+      n_heads: 12
+      rope:
+        type: default
+    feed_forward:
+      feed_forward_type: glu
+      ff_hidden_size: 2304
+      activation_type: silu
+    linear:
+      type: noble
+      noble:
+        r: 64
+        activation_type: cosnet
+        apply_to: [all]
+    layer_norm:
+      layer_norm_type: rms
+    output_norm:
+      layer_norm_type: rms
+    vocab_size: 50257
+    max_sequence_length: 2048
+    init_method: llama
+  sequence_length: 2048
+
+training:
+  batch_size: 8
+  gradient_accumulation_steps: 1
+  max_epochs: 1
+  learning_rate: 3e-4
+  weight_decay: 0.1
+  max_grad_norm: 1.0
+
+optimizer:
+  optimizer: muon
+  lr_scheduler: wsd
+  lr_scheduler_kwargs:
+    warmup_frac: 0.1
+    cooldown_frac: 0.1
+
+data:
+  dataset_name: HuggingFaceFW/fineweb-edu
+  dataset_config: sample-10BT
+  data_preprocessing_num_proc: 8
+
+hardware:
+  precision: bf16-mixed
+  strategy: fsdp
+  devices: auto
+
+logging:
+  project_name: noble-experiments

@@ -1,7 +1,8 @@
 model:
   model_type: llama-small            # one of: gpt-tiny, gpt-small, gpt-medium,
                                     #         gpt-large, gpt-xl, gpt-2.7b,
-                                    #         llama-small, llama-medium, llama-large
+                                    #         llama-small, llama-medium, llama-large,
+                                    #         llama-xsa-small
   transformer_type: base            # "base" or "normalized"
   sequence_length: 2048
   use_post_sdpa_gate: false

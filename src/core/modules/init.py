@@ -1,11 +1,12 @@
 from enum import Enum
-from typing import Optional
+from typing import Optional, Union
 
 import torch
 import torch.nn as nn
 
 from core.modules.attention import Attention
 from core.modules.feed_forward import FeedForward, GLU, MLP
+from core.modules.noble import LinearNoble
 
 
 class InitMethod(str, Enum):
@@ -13,10 +14,11 @@ class InitMethod(str, Enum):
     LLAMA = "llama"
     NORMALIZED = "normalized"
 
-    def _init_linear(self, module: nn.Linear, std: float = 0.02, generator: Optional[torch.Generator] = None) -> None:
-        nn.init.trunc_normal_(module.weight, mean=0.0, std=std, a=-3 * std, b=3 * std, generator=generator)
-        if module.bias is not None:
-            nn.init.zeros_(module.bias)
+    def _init_linear(self, module: Union[nn.Linear, LinearNoble], std: float = 0.02, generator: Optional[torch.Generator] = None) -> None:
+        target = module.linear if isinstance(module, LinearNoble) else module
+        nn.init.trunc_normal_(target.weight, mean=0.0, std=std, a=-3 * std, b=3 * std, generator=generator)
+        if target.bias is not None:
+            nn.init.zeros_(target.bias)
 
     def init_embeddings(
         self, module: nn.Embedding, std: float = 0.02, generator: Optional[torch.Generator] = None
@@ -29,9 +31,8 @@ class InitMethod(str, Enum):
             nn.init.trunc_normal_(module.weight, mean=0.0, std=0.02, a=-3 * 0.02, b=3 * 0.02, generator=generator)
 
     def init_final_w_out(
-        self, module: nn.Linear, d_model: int, std: float = 0.02, generator: Optional[torch.Generator] = None
+        self, module: Union[nn.Linear, LinearNoble], d_model: int, std: float = 0.02, generator: Optional[torch.Generator] = None
     ) -> None:
-        std = 0.02
         if self in [InitMethod.LLAMA, InitMethod.NORMALIZED]:
             std = d_model**-0.5
         self._init_linear(module, std, generator)

@@ -59,7 +59,7 @@ class RoPE(nn.Module):
             if pos_cos.device != device:
                 pos_cos = pos_cos.to(device)
                 self._cache[f"pos_cos"] = pos_cos
-            return pos_sin[:seq_len, :], pos_cos[:seq_len, :]
+            return pos_cos[:seq_len, :], pos_sin[:seq_len, :]
         with torch.autocast(device_type=device.type, enabled=False):
             inv_freq = 1.0 / (
                 self.theta ** (torch.arange(0, self.dim, 2, device=device, dtype=torch.float32) / self.dim)

@@ -14,6 +14,7 @@ from core.models.model import CoreModel, NormalizedCoreModel
 from core.modules.attention import AttentionType, AttentionConfig
 from core.modules.feed_forward import FeedForwardType, FeedForwardConfig
 from core.modules.layer_norm import LayerNormConfig
+from core.modules.linear import LinearConfig, LinearType
 from core.modules.loss import LossConfig
 from core.utils import DType
 
@@ -36,10 +37,11 @@ class CoreConfig(BaseModel):
     attention: AttentionConfig
     feed_forward: FeedForwardConfig
     layer_norm: LayerNormConfig
+    linear: LinearConfig = Field(default_factory=LinearConfig)
     output_norm: Optional[LayerNormConfig] = None
     dropout: float = 0.0
     dtype: DType = DType.FLOAT32
-    loss: LossConfig = Field(default_factory= lambda:LossConfig())
+    loss: LossConfig = Field(default_factory=LossConfig)
     init_method: InitMethod = InitMethod.NORMAL
     init_seed: int = 42
 
@@ -53,14 +55,30 @@ class CoreConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_type(self) -> Self:
+        self.loss.ignore_index = self.pad_token_id
+
         if self.transformer_type == CoreType.NORMALIZED:
             if self.attention.dropout != 0.0:
                 raise ValueError("NormalizedCoreModel does not support dropout")
+            if self.attention.use_post_sdpa_gate:
+                raise ValueError(
+                    "use_post_sdpa_gate is not compatible with the normalized "
+                    "transformer. NormalizedAttention overrides the forward pass "
+                    "and the gate would be silently ignored."
+                )
             self.attention.type = AttentionType.NORMALIZED
             if self.feed_forward.feed_forward_type == FeedForwardType.MLP:
                 self.feed_forward.feed_forward_type = FeedForwardType.NORMALIZED_MLP
             elif self.feed_forward.feed_forward_type == FeedForwardType.GLU:
                 self.feed_forward.feed_forward_type = FeedForwardType.NORMALIZED_GLU
+
+        if self.linear.type != LinearType.DEFAULT and self.linear.noble is not None:
+            apply_to = self.linear.noble.apply_to
+            if "all" in apply_to or "att" in apply_to:
+                self.attention.linear = self.linear
+            if "all" in apply_to or "ff" in apply_to:
+                self.feed_forward.linear = self.linear
+
         return self
 
     @classmethod
@@ -82,6 +100,13 @@ class CoreConfig(BaseModel):
                 handler.apply_to_config(config, getattr(optimizations, f.name))
         return config
 
+    def _resolve_lm_linear(self) -> LinearConfig:
+        if self.linear.type != LinearType.DEFAULT and self.linear.noble is not None:
+            apply_to = self.linear.noble.apply_to
+            if "all" in apply_to or "lm_head" in apply_to:
+                return self.linear
+        return LinearConfig()
+
     def build(self) -> CoreModel:
         logger = logging.getLogger(__name__)
         label_weights = None
@@ -89,6 +114,8 @@ class CoreConfig(BaseModel):
             label_weights = torch.load(self.label_weights_path, weights_only=True)
             logger.info(f"Loaded label weights from {self.label_weights_path} "
                         f"(shape={label_weights.shape})")
+
+        lm_linear = self._resolve_lm_linear()
 
         if self.transformer_type == CoreType.NORMALIZED:
             model = NormalizedCoreModel(
@@ -105,6 +132,7 @@ class CoreConfig(BaseModel):
                 vocab_size=self.vocab_size,
                 loss_config=self.loss,
                 label_weights=label_weights,
+                lm_linear_config=lm_linear,
             )
         else:
             model = CoreModel(
@@ -121,6 +149,7 @@ class CoreConfig(BaseModel):
                 vocab_size=self.vocab_size,
                 loss_config=self.loss,
                 label_weights=label_weights,
+                lm_linear_config=lm_linear,
             )
         model.init_weights(max_seq_len=self.max_sequence_length)
         return model

@@ -44,19 +44,34 @@ def _distributed_barrier() -> None:
 
 def create_model_config(training_config: TrainingConfig, vocab_size: int, pad_token_id: int) -> CoreConfig:
     """Create model configuration from training config using the model recipe registry.
+
+    If `training_config.core_config` is set (an inline dict), a
+    `CoreConfig` is built directly from that dict (bypassing the
+    recipe registry).  Otherwise the recipe registry is used as before.
     """
-    recipe = ModelRecipe.get_recipe(training_config.model_type)
-    use_xsa = False if not hasattr(recipe, "use_xsa") else recipe.use_xsa
-    config = recipe.build_config(
-        vocab_size=vocab_size,
-        max_sequence_length=training_config.sequence_length,
-        dropout=training_config.dropout,
-        transformer_type=training_config.transformer_type,
-        use_post_sdpa_gate=training_config.use_post_sdpa_gate,
-        gate_activation_type=training_config.gate_activation_type,
-        pad_token_id=pad_token_id,
-        use_xsa=use_xsa,
-    )
+    if training_config.core_config is not None:
+        overrides = {
+            "vocab_size": vocab_size,
+            "pad_token_id": pad_token_id,
+            "max_sequence_length": training_config.sequence_length,
+        }
+        merged = {**training_config.core_config, **overrides}
+        config = CoreConfig(**merged)
+    else:
+        recipe = ModelRecipe.get_recipe(training_config.model_type)
+        recipe_kwargs = dict(
+            vocab_size=vocab_size,
+            max_sequence_length=training_config.sequence_length,
+            dropout=training_config.dropout,
+            transformer_type=training_config.transformer_type,
+            use_post_sdpa_gate=training_config.use_post_sdpa_gate,
+            gate_activation_type=training_config.gate_activation_type,
+            pad_token_id=pad_token_id,
+        )
+        if hasattr(recipe, "use_xsa"):
+            recipe_kwargs["use_xsa"] = recipe.use_xsa
+        config = recipe.build_config(**recipe_kwargs)
+
     optimizations = training_config.kernel_optimizations
     if optimizations.any_enabled():
         config = config.with_kernel_optimizations(optimizations)
@@ -282,7 +297,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--use-post-sdpa-gate", action="store_true", default=None, help="Use post SDPA gate")
     parser.add_argument("--gate-activation-type", type=str, default=None, choices=["sigmoid", "gelu", "relu"],
                        help="Gate activation type (default: sigmoid)")
-
     # Training configuration ----------------------------------------------------
     parser.add_argument("--batch-size", type=int, default=None, help="Batch size per device (default: 12)")
     parser.add_argument("--max-train-size", type=int, default=None, help="Maximum number of training samples")

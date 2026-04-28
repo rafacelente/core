@@ -6,47 +6,17 @@ import math
 
 import torch
 import torch.nn as nn
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
-from core.utils import normalize_matrix
-
-from core.utils import BufferCache, DType
-
-
-class ActivationType(str, Enum):
-    RELU = "relu"
-    GELU = "gelu"
-    SILU = "silu"
-    SIGMOID = "sigmoid"
-
+from core.utils import normalize_matrix, BufferCache, DType
+from core.modules.activation import Activation, ActivationType
+from core.modules.linear import LinearConfig
 
 class FeedForwardType(str, Enum):
     MLP = "mlp"
     GLU = "glu"
     NORMALIZED_MLP = "normalized_mlp"
     NORMALIZED_GLU = "normalized_glu"
-
-
-class Activation(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    @abstractmethod
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        raise NotImplementedError
-
-    @staticmethod
-    def build(type: ActivationType) -> "Activation":
-        if type == ActivationType.RELU:
-            return cast(Activation, nn.ReLU())
-        elif type == ActivationType.GELU:
-            return cast(Activation, nn.GELU())
-        elif type == ActivationType.SILU:
-            return cast(Activation, nn.SiLU())
-        elif type == ActivationType.SIGMOID:
-            return cast(Activation, nn.Sigmoid())
-        else:
-            raise ValueError(f"Invalid activation type: {type}")
 
 
 class MLP(nn.Module):
@@ -56,12 +26,15 @@ class MLP(nn.Module):
         hidden_size: int,
         activation_type: ActivationType,
         dtype: torch.dtype = torch.float32,
+        linear_config: Optional[LinearConfig] = None,
     ):
         super().__init__()
+        if linear_config is None:
+            linear_config = LinearConfig()
         self.d_model = d_model
-        self.w1 = nn.Linear(in_features=d_model, out_features=hidden_size, dtype=dtype, bias=False)
+        self.w1 = linear_config.build(in_features=d_model, out_features=hidden_size, dtype=dtype, bias=False)
         self.activation = Activation.build(activation_type)
-        self.w2 = nn.Linear(in_features=hidden_size, out_features=d_model, dtype=dtype, bias=False)
+        self.w2 = linear_config.build(in_features=hidden_size, out_features=d_model, dtype=dtype, bias=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.w2(self.activation(self.w1(x)))
@@ -73,8 +46,9 @@ class NormalizedMLP(MLP):
         hidden_size: int,
         activation_type: ActivationType,
         dtype: torch.dtype = torch.float32,
+        linear_config: Optional[LinearConfig] = None,
     ):
-        super().__init__(d_model, hidden_size, activation_type, dtype)
+        super().__init__(d_model, hidden_size, activation_type, dtype, linear_config)
         self.sw1_init_value = 1.0
         self.sw1_init_scaling = 1.0 / math.sqrt(d_model)
         self.sw1 = nn.Parameter(self.sw1_init_scaling * torch.ones(hidden_size))
@@ -92,14 +66,21 @@ class NormalizedMLP(MLP):
 
 class GLU(nn.Module):
     def __init__(
-        self, d_model: int, hidden_size: int, activation_type: ActivationType, dtype: torch.dtype = torch.float32
+        self,
+        d_model: int,
+        hidden_size: int,
+        activation_type: ActivationType,
+        dtype: torch.dtype = torch.float32,
+        linear_config: Optional[LinearConfig] = None,
     ):
         super().__init__()
+        if linear_config is None:
+            linear_config = LinearConfig()
         self.d_model = d_model
         self.hidden_size = hidden_size
-        self.w1 = nn.Linear(in_features=d_model, out_features=hidden_size, dtype=dtype, bias=False)
-        self.w2 = nn.Linear(in_features=hidden_size, out_features=d_model, dtype=dtype, bias=False)
-        self.w3 = nn.Linear(in_features=d_model, out_features=hidden_size, dtype=dtype, bias=False)
+        self.w1 = linear_config.build(in_features=d_model, out_features=hidden_size, dtype=dtype, bias=False)
+        self.w2 = linear_config.build(in_features=hidden_size, out_features=d_model, dtype=dtype, bias=False)
+        self.w3 = linear_config.build(in_features=d_model, out_features=hidden_size, dtype=dtype, bias=False)
         self.activation = Activation.build(activation_type)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -112,8 +93,9 @@ class NormalizedGLU(GLU):
         hidden_size: int,
         activation_type: ActivationType,
         dtype: torch.dtype = torch.float32,
+        linear_config: Optional[LinearConfig] = None,
     ):
-        super().__init__(d_model, hidden_size, activation_type, dtype)
+        super().__init__(d_model, hidden_size, activation_type, dtype, linear_config)
         self.sw_init_value = 1.0
         self.sw_init_scaling = 1.0 / math.sqrt(d_model)
         self.sw1 = nn.Parameter(self.sw_init_scaling * torch.ones(hidden_size))
@@ -148,15 +130,16 @@ class FeedForward(nn.Module):
         dtype: torch.dtype = torch.float32,
         # TODO: cache for MoE when implemented
         cache: Optional[BufferCache] = None,
+        linear_config: Optional[LinearConfig] = None,
     ) -> "FeedForward":
         if type == FeedForwardType.MLP:
-            return cast(FeedForward, MLP(d_model, hidden_size, activation_type, dtype))
+            return cast(FeedForward, MLP(d_model, hidden_size, activation_type, dtype, linear_config))
         elif type == FeedForwardType.GLU:
-            return cast(FeedForward, GLU(d_model, hidden_size, activation_type, dtype))
+            return cast(FeedForward, GLU(d_model, hidden_size, activation_type, dtype, linear_config))
         elif type == FeedForwardType.NORMALIZED_MLP:
-            return cast(FeedForward, NormalizedMLP(d_model, hidden_size, activation_type, dtype))
+            return cast(FeedForward, NormalizedMLP(d_model, hidden_size, activation_type, dtype, linear_config))
         elif type == FeedForwardType.NORMALIZED_GLU:
-            return cast(FeedForward, NormalizedGLU(d_model, hidden_size, activation_type, dtype))
+            return cast(FeedForward, NormalizedGLU(d_model, hidden_size, activation_type, dtype, linear_config))
         else:
             raise ValueError(f"Invalid feed forward type: {type}")
 
@@ -178,6 +161,7 @@ class FeedForwardConfig(BaseModel):
     activation_type: ActivationType = ActivationType.GELU
     feed_forward_type: FeedForwardType = FeedForwardType.MLP
     dtype: DType = DType.FLOAT32
+    linear: LinearConfig = Field(default_factory=LinearConfig)
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
@@ -194,4 +178,5 @@ class FeedForwardConfig(BaseModel):
             activation_type=self.activation_type,
             dtype=self.dtype.to_torch_dtype(),
             cache=cache,
+            linear_config=self.linear,
         )

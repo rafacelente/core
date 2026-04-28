@@ -19,9 +19,10 @@ except ImportError as exc:
 from core.utils import normalize_matrix
 
 from core.modules.layer_norm import LayerNorm, LayerNormConfig
+from core.modules.linear import LinearConfig
 from core.modules.rope import RoPEConfig
 from core.utils import BufferCache
-from core.modules.feed_forward import Activation, ActivationType
+from core.modules.activation import Activation, ActivationType
 
 class AttentionType(str, Enum):
     DEFAULT = "default"
@@ -43,8 +44,11 @@ class DefaultAttention(nn.Module):
         gate_activation_type: ActivationType = ActivationType.SIGMOID,
         use_flash_attn_4: bool = False,
         use_xsa: bool = False,
+        linear_config: Optional[LinearConfig] = None,
     ):
         super().__init__()
+        if linear_config is None:
+            linear_config = LinearConfig()
         self.d_model = d_model
         self.n_heads = n_heads
         self.n_kv_heads = n_kv_heads or n_heads
@@ -62,17 +66,17 @@ class DefaultAttention(nn.Module):
         query_size = self.n_heads * self.head_dim
         key_size = self.n_kv_heads * self.head_dim
         value_size = self.n_kv_heads * self.head_dim
-        self.w_q = nn.Linear(d_model, query_size, bias=False)
-        self.w_k = nn.Linear(d_model, key_size, bias=False)
-        self.w_v = nn.Linear(d_model, value_size, bias=False)
-        self.w_o = nn.Linear(query_size, d_model, bias=False)
+        self.w_q = linear_config.build(d_model, query_size, bias=False)
+        self.w_k = linear_config.build(d_model, key_size, bias=False)
+        self.w_v = linear_config.build(d_model, value_size, bias=False)
+        self.w_o = linear_config.build(query_size, d_model, bias=False)
 
         if self.use_rope:
             self.rope = self.rope_config.build(head_size=self.head_dim, cache=cache)
         self._setup_qk_norm()
 
         if self.use_post_sdpa_gate:
-            self.post_sdpa_gate = nn.Linear(d_model, d_model, bias=False)
+            self.post_sdpa_gate = linear_config.build(d_model, d_model, bias=False)
             self.gate_activation = Activation.build(gate_activation_type)
 
     def _setup_qk_norm(self) -> None:
@@ -82,10 +86,24 @@ class DefaultAttention(nn.Module):
             self.q_norm = self.qk_norm_config.build(hidden_size=self.head_dim)
             self.k_norm = self.qk_norm_config.build(hidden_size=self.head_dim)
 
+    def _expand_kv_for_xsa(self, vn: torch.Tensor, att: torch.Tensor, heads_dim: int) -> torch.Tensor:
+        """Expand vn from n_kv_heads to n_heads when using GQA."""
+        if vn.size(heads_dim) != att.size(heads_dim):
+            repeats = att.size(heads_dim) // vn.size(heads_dim)
+            vn = vn.repeat_interleave(repeats, dim=heads_dim)
+        return vn
+
+    def _apply_xsa(self, att: torch.Tensor, v: torch.Tensor, heads_dim: int) -> torch.Tensor:
+        vn = torch.nn.functional.normalize(v, dim=-1)
+        vn = self._expand_kv_for_xsa(vn, att, heads_dim)
+        return att - (att * vn).sum(dim=-1, keepdim=True) * vn
+
     def sdpa(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
         # flash-attn-4 expects (B, T, nheads, head_dim)
         if self.use_flash_attn_4 and flash_attn_func is not None:
             out, _ = flash_attn_func(q, k, v, causal=True)
+            if self.use_xsa:
+                out = self._apply_xsa(out, v, heads_dim=2)
             return out
 
         # Standard SDPA expects (B, nheads, T, head_dim)
@@ -97,8 +115,7 @@ class DefaultAttention(nn.Module):
                 q, k, v, attn_mask=None, dropout_p=self.dropout_p, is_causal=True, enable_gqa=True
             )
         if self.use_xsa:
-            vn = torch.nn.functional.normalize(v, dim=-1)
-            att = att - (att * vn).sum(dim=-1, keepdim=True) * vn
+            att = self._apply_xsa(att, v, heads_dim=1)
 
         return att.transpose(1, 2).contiguous()
 
@@ -151,8 +168,16 @@ class NormalizedAttention(DefaultAttention):
         use_post_sdpa_gate: bool = False,
         gate_activation_type: ActivationType = ActivationType.SIGMOID,
         use_flash_attn_4: bool = False,
+        use_xsa: bool = False,
+        linear_config: Optional[LinearConfig] = None,
     ):
-        super().__init__(d_model, n_heads, n_kv_heads, head_dim, rope_config, clip_qkv, qk_norm_config, dropout, cache, use_post_sdpa_gate, gate_activation_type)
+        super().__init__(
+            d_model, n_heads, n_kv_heads, head_dim, rope_config, clip_qkv,
+            qk_norm_config, dropout, cache, use_post_sdpa_gate, gate_activation_type,
+            use_flash_attn_4=use_flash_attn_4,
+            use_xsa=use_xsa,
+            linear_config=linear_config,
+        )
         self.sq_init_value = 1.0
         self.sk_init_value = 1.0
         self.sq_init_scaling = 1.0 / math.sqrt(d_model)
@@ -166,20 +191,20 @@ class NormalizedAttention(DefaultAttention):
         bs, seq_len, _ = x.shape
         q, k, v = self.w_q(x), self.w_k(x), self.w_v(x)
 
+        q = q.view(bs, seq_len, -1, self.head_dim)
+        k = k.view(bs, seq_len, -1, self.head_dim)
+        v = v.view(bs, seq_len, -1, self.head_dim)
+
         if self.q_norm is not None:
             q = self.q_norm(q)
         if self.k_norm is not None:
             k = self.k_norm(k)
 
-        sq = (self.sq * (self.sq_init_value / self.sq_init_scaling)).view(1, 1, -1)
+        sq = (self.sq * (self.sq_init_value / self.sq_init_scaling)).view(1, 1, self.n_heads, self.head_dim)
         q = sq * q
 
-        sk = (self.sk * (self.sk_init_value / self.sk_init_scaling)).view(1, 1, -1)
+        sk = (self.sk * (self.sk_init_value / self.sk_init_scaling)).view(1, 1, self.n_kv_heads, self.head_dim)
         k = sk * k
-
-        q = q.view(bs, seq_len, -1, self.head_dim) # B, T, n_heads, head_dim
-        k = k.view(bs, seq_len, -1, self.head_dim) # B, T, n_kv_heads, head_dim
-        v = v.view(bs, seq_len, -1, self.head_dim) # B, T, n_kv_heads, head_dim
 
         if self.use_rope:
             q, k = self.rope(q, k, pos_sin, pos_cos)
@@ -251,6 +276,7 @@ class AttentionConfig(BaseModel):
     gate_activation_type: Optional[ActivationType] = ActivationType.SIGMOID
     use_xsa: bool = False
     use_flash_attn_4: bool = False
+    linear: LinearConfig = Field(default_factory=LinearConfig)
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
@@ -279,4 +305,5 @@ class AttentionConfig(BaseModel):
             gate_activation_type=self.gate_activation_type,
             use_flash_attn_4=self.use_flash_attn_4,
             use_xsa=self.use_xsa,
+            linear_config=self.linear,
         )
