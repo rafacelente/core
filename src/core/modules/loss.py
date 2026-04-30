@@ -1,6 +1,6 @@
 from enum import Enum
 from abc import abstractmethod
-from typing import cast
+from typing import cast, Optional
 
 import torch
 import torch.nn as nn
@@ -49,10 +49,13 @@ class FusedCrossEntropyLoss(Loss):
         super().__init__()
         self.ignore_index = ignore_index
 
-    def forward(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-        loss = _FusedCrossEntropyFunction.apply(logits, labels, self.ignore_index)
-        valid_count = (labels != self.ignore_index).sum()
-        return loss.sum() / valid_count.float()
+    def forward(self, logits: torch.Tensor, labels: torch.Tensor, weight: Optional[torch.Tensor] = None) -> torch.Tensor:
+        loss = _FusedCrossEntropyFunction.apply(logits, labels, self.ignore_index, weight)
+        if weight is not None:
+            valid = labels != self.ignore_index
+            denom = (weight[labels.clamp(min=0)] * valid).sum()
+            return loss.sum() / denom
+        return loss.sum() / (labels != self.ignore_index).sum().float()
 
 
 class LossConfig(BaseModel):

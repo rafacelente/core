@@ -93,11 +93,12 @@ def setup_callbacks(config: TrainingConfig, num_devices: Optional[int] = None) -
     if not (config.enable_profiling or config.enable_throughput_measurement) and config.log_model:
         checkpoint_callback = ModelCheckpoint(
             dirpath=config.save_dir / "checkpoints",
-            filename="best-{epoch:02d}-{val_loss:.4f}",
-            monitor=config.monitor_metric,
-            mode="min",
-            save_top_k=config.save_top_k,
-            save_last=True,
+            filename="{step}-{val_loss:.4f}",
+            # monitor=config.monitor_metric,
+            # mode="min",
+            # save_top_k=-1,
+            every_n_train_steps=4943,
+            # save_last=True,
             verbose=True,
         )
         callbacks.append(checkpoint_callback)
@@ -188,8 +189,8 @@ def setup_logger(
         logger = MLFlowLogger(
             experiment_name=config.project_name,
             run_name=run_name,
-            save_dir=str(config.save_dir),
-            log_model=True,
+            # save_dir=str(config.save_dir),
+            log_model="all",
         )
         logger.log_hyperparams(logger_config)
         return logger
