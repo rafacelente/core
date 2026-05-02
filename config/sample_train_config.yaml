@@ -31,14 +31,12 @@ optimizer:
     cooldown_frac: 0.2
 
 data:
-  # dataset_name: "HuggingFaceFW/fineweb-edu"
-  # dataset_config: "sample-10BT"
+  dataset_name: "HuggingFaceFW/fineweb-edu"
+  dataset_config: "sample-10BT"
   data_preprocessing_num_proc: 8
   # max_train_size: 10000              # null means use the full dataset
   # max_val_size: 10000
   use_pretokenized_dataset: true
-  pretokenized_dataset_path: gs://aic-br-us-central1-prod-workstream-credit-adhoc/pretokenized-fineweb/sample-10BT-gpt2-2048-seed42-train1582031-val50000
-  label_weights_path:  /tmp/label_weights_neglog_p_train_1582031samples.pt
 
 hardware:
   precision: bf16-mixed

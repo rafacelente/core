@@ -35,6 +35,10 @@ dev = [
 test = [
     "pytest>=8.4.0",
 ]
+eval = [
+    "lm-eval>=0.4.8",
+    "accelerate",
+]
 
 [dependency-groups]
 dev = [
