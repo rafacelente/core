@@ -45,6 +45,22 @@ class CoreLightningModel(L.LightningModule):
         input_ids, labels = batch
         outputs = self.model(input_ids=input_ids, labels=labels)
         loss = outputs.loss
+        logits = outputs.logits
+
+        shift_logits = logits[..., :-1, :].contiguous()
+        shift_labels = labels[..., 1:].contiguous()
+
+        non_weighted_loss = torch.nn.functional.cross_entropy(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1), ignore_index=self.model.loss_fn.ignore_index)
+
+        self.log(
+            "val_loss_unweighted",
+            non_weighted_loss,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=False,
+            logger=True,
+            sync_dist=True,
+        )
 
         self.log(
             "val_loss",

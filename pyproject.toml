@@ -27,13 +27,17 @@ dependencies = [
 
 [project.optional-dependencies]
 gpu = [
-    "quack-kernels>=0.2.4",
+    "quack-kernels @ git+https://github.com/Dao-AILab/quack.git@main",
 ]
 dev = [
     "pytest>=8.4.0",
 ]
 test = [
     "pytest>=8.4.0",
+]
+eval = [
+    "lm-eval>=0.4.8",
+    "accelerate",
 ]
 
 [dependency-groups]
@@ -46,6 +50,9 @@ dev = [
 name = "pypi"
 url = "https://pypi.org/simple"
 default = true
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [build-system]
 requires = ["hatchling"]

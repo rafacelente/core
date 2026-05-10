@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Tuple, Optional
 
 import torch
 
@@ -27,21 +27,23 @@ class _FusedCrossEntropyFunction(torch.autograd.Function):
         logits: torch.Tensor,
         labels: torch.Tensor,
         ignore_index: int,
+        weight: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         cross_entropy_fwd, _ = _import_quack_cross_entropy()
         loss, lse = cross_entropy_fwd(
-            logits, labels, ignore_index=ignore_index, return_lse=True
+            logits, labels, weight=weight, ignore_index=ignore_index, return_lse=True
         )
         ctx.save_for_backward(logits, labels, lse)
+        ctx.weight = weight
         ctx.ignore_index = ignore_index
         return loss
 
     @staticmethod
-    def backward(ctx, grad_loss: torch.Tensor) -> Tuple[torch.Tensor, None, None]:
+    def backward(ctx, grad_loss: torch.Tensor) -> Tuple[torch.Tensor, None, None, None]:
         _, cross_entropy_bwd = _import_quack_cross_entropy()
         logits, labels, lse = ctx.saved_tensors
         grad_loss = grad_loss.contiguous()
         grad_logits = cross_entropy_bwd(
-            logits, labels, grad_loss, lse, ignore_index=ctx.ignore_index
+            logits, labels, grad_loss, lse, weight=ctx.weight, ignore_index=ctx.ignore_index
         )
-        return grad_logits, None, None
+        return grad_logits, None, None, None

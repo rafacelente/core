@@ -115,6 +115,11 @@ class CoreConfig(BaseModel):
             logger.info(f"Loaded label weights from {self.label_weights_path} "
                         f"(shape={label_weights.shape})")
 
+            if self.vocab_size != label_weights.shape[0]:
+                padding_total = self.vocab_size - label_weights.shape[0]
+                label_weights = torch.nn.functional.pad(label_weights, (0, padding_total), "constant", value=0.0)
+                
+
         lm_linear = self._resolve_lm_linear()
 
         if self.transformer_type == CoreType.NORMALIZED:

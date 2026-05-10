@@ -1,8 +1,7 @@
 model:
   model_type: llama-small            # one of: gpt-tiny, gpt-small, gpt-medium,
                                     #         gpt-large, gpt-xl, gpt-2.7b,
-                                    #         llama-small, llama-medium, llama-large,
-                                    #         llama-xsa-small
+                                    #         llama-small, llama-medium, llama-large
   transformer_type: base            # "base" or "normalized"
   sequence_length: 2048
   use_post_sdpa_gate: false
@@ -19,10 +18,10 @@ training:
   max_steps: -1                     # set > 0 to cap total optimizer steps
 
 optimizations:
-  fused_rope: false         
-  fused_cross_entropy: false
-  fused_rms_norm: false
-  flash_attn_4: false
+  fused_rope: true         
+  fused_cross_entropy: true
+  fused_rms_norm: true
+  flash_attn_4: true
 
 optimizer:
   optimizer: adamw                   # one of: adam, adamw, muon, sgd
@@ -35,9 +34,9 @@ data:
   dataset_name: "HuggingFaceFW/fineweb-edu"
   dataset_config: "sample-10BT"
   data_preprocessing_num_proc: 8
-  max_train_size: 10000              # null means use the full dataset
-  max_val_size: 10000
-  use_pretokenized_dataset: false
+  # max_train_size: 10000              # null means use the full dataset
+  # max_val_size: 10000
+  use_pretokenized_dataset: true
 
 hardware:
   precision: bf16-mixed
@@ -53,7 +52,7 @@ logging:
   val_check_interval: 0.1
   save_top_k: 1
   monitor_metric: val_loss
-  log_model: false
+  log_model: true
   logger_type: mlflow # mlflow or wandb
 
 profiling:

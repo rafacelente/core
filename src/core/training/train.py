@@ -3,9 +3,12 @@ import logging
 import argparse
 from typing import List, Optional, Union
 
+os.environ["NCCL_TUNER_PLUGIN"] = "/dev/null"
+
+import litdata
 import torch
 import lightning as L
-import litdata
+
 from lightning import Trainer
 from lightning.pytorch.strategies import FSDPStrategy
 from lightning.pytorch.loggers import WandbLogger, MLFlowLogger
@@ -27,20 +30,6 @@ from core.training.callbacks.profiler_callback import ThroughputMeasureCallback
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
-def _distributed_barrier() -> None:
-    world_size = int(os.environ.get("WORLD_SIZE", 1))
-    if world_size <= 1:
-        return
-    
-    if not torch.distributed.is_initialized():
-        backend = "nccl" if torch.cuda.is_available() else "gloo"
-        local_rank = int(os.environ.get("LOCAL_RANK", 0))
-        device_id = torch.device(f"cuda:{local_rank}") if torch.cuda.is_available() else None
-        torch.distributed.init_process_group(backend=backend, device_id=device_id)
-    
-    torch.distributed.barrier()
-
 
 def create_model_config(training_config: TrainingConfig, vocab_size: int, pad_token_id: int) -> CoreConfig:
     """Create model configuration from training config using the model recipe registry.
@@ -93,11 +82,12 @@ def setup_callbacks(config: TrainingConfig, num_devices: Optional[int] = None) -
     if not (config.enable_profiling or config.enable_throughput_measurement) and config.log_model:
         checkpoint_callback = ModelCheckpoint(
             dirpath=config.save_dir / "checkpoints",
-            filename="best-{epoch:02d}-{val_loss:.4f}",
-            monitor=config.monitor_metric,
-            mode="min",
-            save_top_k=config.save_top_k,
-            save_last=True,
+            filename="{step}-{val_loss:.4f}",
+            # monitor=config.monitor_metric,
+            # mode="min",
+            # save_top_k=-1,
+            every_n_train_steps=4943,
+            # save_last=True,
             verbose=True,
         )
         callbacks.append(checkpoint_callback)
@@ -188,8 +178,8 @@ def setup_logger(
         logger = MLFlowLogger(
             experiment_name=config.project_name,
             run_name=run_name,
-            save_dir=str(config.save_dir),
-            log_model=True,
+            # save_dir=str(config.save_dir),
+            log_model="all",
         )
         logger.log_hyperparams(logger_config)
         return logger
@@ -440,19 +430,13 @@ def main():
         logger.info(f"Loaded metadata from {config.pretokenized_dataset_path}")
         logger.info(f"  Tokenizer: {metadata.tokenizer_name}, Vocab size: {vocab_size}")
         logger.info(f"  Train size: {metadata.train_size}, Val size: {metadata.val_size}")
-        global_rank = int(os.environ.get("RANK", 0))
 
-        if global_rank == 0:
-            logger.info("[Global Rank 0] Indexing datasets...")
-            litdata.index_parquet_dataset(f"{config.pretokenized_dataset_path}/train")
-            if metadata.val_size is not None:
-                litdata.index_parquet_dataset(f"{config.pretokenized_dataset_path}/val")
-            logger.info("[Global Rank 0] Indexing complete.")
+        logger.info("Indexing datasets (pre-distributed, single process)...")
+        litdata.index_parquet_dataset(f"{config.pretokenized_dataset_path}/train")
+        if metadata.val_size is not None:
+            litdata.index_parquet_dataset(f"{config.pretokenized_dataset_path}/val")
+        logger.info("Indexing complete.")
 
-        _distributed_barrier()
-        if global_rank != 0:
-            logger.info(f"[Global Rank {global_rank}] Indexing complete, proceeding.")
-        
         data_module = TokenizedFinewebDataModule(
             train_dataset_path=f"{config.pretokenized_dataset_path}/train",
             val_dataset_path=f"{config.pretokenized_dataset_path}/val" if metadata.val_size is not None else None,
